@@ -1,0 +1,97 @@
+diff --git a/CLOUD-LITE-START-HERE.md b/CLOUD-LITE-START-HERE.md
+index ac4a7a6..2f4defd 100644
+--- a/CLOUD-LITE-START-HERE.md
++++ b/CLOUD-LITE-START-HERE.md
+@@ -1,4 +1,8 @@
+-# Cloud Lite NX — исходный проект, версия 1.1.1
++# Cloud Lite NX — исходный проект, версия 1.1.2
++
++В версии 1.1.2 исправлено ожидание подтверждения QR-кода: ответ HTTP 400
++с `status=fail` и `error=token not verified` на этапе проверки кода считается
++ожиданием входа. Остальные ошибки по-прежнему показываются на экране.
+ 
+ Своя модификация VKPCNX для запуска VK Play Cloud на прошитой Nintendo Switch.
+ Android и домашний ПК как сервер не требуются. Компьютер или GitHub Actions
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d187eae..318a96d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,10 +52,10 @@ endif ()
+ project(vkpcnx)
+ set(VERSION_MAJOR "1")
+ set(VERSION_MINOR "1")
+-set(VERSION_ALTER "1")
++set(VERSION_ALTER "2")
+ set(VERSION_BUILD "0")
+ set(PROJECT_DISPLAY_NAME "Cloud Lite NX")
+-set(PROJECT_AUTHOR "m4l3vich; Cloud Lite NX contributors")
++set(PROJECT_AUTHOR "m4l3vich and Cloud Lite NX contributors")
+ set(PROJECT_ICON ${CMAKE_CURRENT_SOURCE_DIR}/resources/icon/icon.jpg)
+ set(PROJECT_RESOURCES ${CMAKE_CURRENT_SOURCE_DIR}/resources)
+ 
+diff --git a/NOTICE b/NOTICE
+index b92c519..120a0bf 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -1,4 +1,4 @@
+-Cloud Lite NX 1.1.1 — modified version of VKPCNX.
++Cloud Lite NX 1.1.2 — modified version of VKPCNX.
+ Upstream: https://github.com/m4l3vich/vkpcnx
+ Base commit: 8283e8eebe2e7f884746be0b6a36a66904ceecc5
+ Original author: m4l3vich. Original LICENSE is retained (Apache License 2.0).
+diff --git a/tests/auth_reply_test.cpp b/tests/auth_reply_test.cpp
+index d111853..e14b808 100644
+--- a/tests/auth_reply_test.cpp
++++ b/tests/auth_reply_test.cpp
+@@ -28,6 +28,24 @@ int main() {
+   check(Stage::Poll,200,0,R"({"oauth2_code":42})",State::Failed);
+   check(Stage::Poll,200,0,R"({"error":"expired"})",State::Failed);
+   check(Stage::Poll,200,0,R"({"oauth2_code":"SECRET_TOKEN"})",State::Ready);
++  const std::string waiting = R"({"user_id":null,"status":"fail","error":"token not verified"})";
++  check(Stage::Poll,400,0,waiting,State::Pending);
++  check(Stage::Init,400,0,waiting,State::Failed);
++  check(Stage::Exchange,400,0,waiting,State::Failed);
++  check(Stage::Poll,401,0,waiting,State::Failed);
++  check(Stage::Poll,500,0,waiting,State::Failed);
++  check(Stage::Poll,400,60,waiting,State::Failed);
++  for (const char *body : {"<html>bad request</html>", "null", "[]", "{", "{}",
++       R"({"status":"fail","error":"expired"})",
++       R"({"status":"fail","error":"invalid token"})",
++       R"({"status":"ok","error":"token not verified"})",
++       R"({"error":"token not verified"})",
++       R"({"status":"fail","error":null})",
++       R"({"status":"fail","error":42})"})
++    check(Stage::Poll,400,0,body,State::Failed);
++  // A pending response must allow the next successful poll to complete login.
++  check(Stage::Poll,400,0,waiting,State::Pending);
++  check(Stage::Poll,200,0,R"({"oauth2_code":"SECRET_TOKEN"})",State::Ready);
+   check(Stage::Exchange,200,0,R"({"access_token":"SECRET_TOKEN"})",State::Ready);
+   check(Stage::Exchange,200,0,R"({"access_token":null})",State::Failed);
+   check(Stage::Exchange,200,0,R"({"access_token":""})",State::Failed);
+diff --git a/vkpcnx/include/core/auth/reply.hpp b/vkpcnx/include/core/auth/reply.hpp
+index d81e595..cadbb40 100644
+--- a/vkpcnx/include/core/auth/reply.hpp
++++ b/vkpcnx/include/core/auth/reply.hpp
+@@ -29,6 +29,14 @@ inline Reply parse(Stage stage, long status, int transport, const std::string &b
+     }
+     return {State::Failed, {}, message + " Код сети: " + std::to_string(transport)};
+   }
++  auto j = Json::parse(body, nullptr, false);
++  // VK Play returns this HTTP 400 while a newly issued TV code is awaiting
++  // confirmation. Keep the QR screen and continue the bounded polling loop.
++  // Only this exact response is pending; other HTTP 400 errors still fail.
++  if (stage == Stage::Poll && status == 400 && j.is_object() &&
++      j.contains("status") && j.at("status") == "fail" &&
++      j.contains("error") && j.at("error") == "token not verified")
++    return {State::Pending, {}, {}};
+   if (status < 200 || status >= 300) {
+     std::string message = status == 429 ? "Слишком много запросов. Подождите минуту." :
+       status >= 500 ? "Сервис временно недоступен. Попробуйте позже." :
+@@ -36,7 +44,6 @@ inline Reply parse(Stage stage, long status, int transport, const std::string &b
+       "Сервер вернул ошибку.";
+     return {State::Failed, {}, message + " HTTP " + std::to_string(status)};
+   }
+-  auto j = Json::parse(body, nullptr, false);
+   if (!j.is_object())
+     return {State::Failed, {}, "Неожиданный ответ сервера: ожидался JSON-объект."};
+   if (stage == Stage::Init && textField(j, "code") && textField(j, "token"))

@@ -17,11 +17,11 @@ jobs:
       - name: Download project
         uses: actions/checkout@v4
 
-      - name: Unpack source
+      - name: Unpack source and apply login fix
         run: |
           unzip -q Cloud-Lite-NX-source.zip -d source
+          git apply --directory=source/Cloud-Lite-NX fixes/polling-1.1.2.patch
           chmod +x source/Cloud-Lite-NX/scripts/*.sh
-                    sed -i 's/m4l3vich; Cloud Lite NX contributors/m4l3vich and Cloud Lite NX contributors/' source/Cloud-Lite-NX/CMakeLists.txt
 
       - name: Build Switch application
         run: |
@@ -30,7 +30,7 @@ jobs:
             -v "$GITHUB_WORKSPACE/source/Cloud-Lite-NX:/work" \
             -w /work \
             devkitpro/devkita64:latest \
-                        bash -c 'chown -R "$(id -u):$(id -g)" /work && bash scripts/build-cloud-lite-container.sh'
+            bash -c 'chown -R "$(id -u):$(id -g)" /work && bash scripts/build-cloud-lite-container.sh'
 
       - name: Save application
         uses: actions/upload-artifact@v4
