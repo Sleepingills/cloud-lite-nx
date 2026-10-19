@@ -29,7 +29,7 @@ jobs:
             -v "$GITHUB_WORKSPACE/source/Cloud-Lite-NX:/work" \
             -w /work \
             devkitpro/devkita64:latest \
-            bash scripts/build-cloud-lite-container.sh
+                        bash -c 'chown -R "$(id -u):$(id -g)" /work && bash scripts/build-cloud-lite-container.sh'
 
       - name: Save application
         uses: actions/upload-artifact@v4
