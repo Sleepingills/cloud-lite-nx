@@ -1,0 +1,126 @@
+diff --git a/CLOUD-LITE-START-HERE.md b/CLOUD-LITE-START-HERE.md
+index 2f4defd..39b16f8 100644
+--- a/CLOUD-LITE-START-HERE.md
++++ b/CLOUD-LITE-START-HERE.md
+@@ -1,4 +1,8 @@
+-# Cloud Lite NX — исходный проект, версия 1.1.2
++# Cloud Lite NX — исходный проект, версия 1.1.3
++
++В версии 1.1.3 одиночный тайм-аут проверки входа больше не закрывает QR-код.
++Приложение делает до двух повторов с уведомлением; третья подряд ошибка 28
++показывается на экране. Срок действия кода и пауза между проверками сохранены.
+ 
+ В версии 1.1.2 исправлено ожидание подтверждения QR-кода: ответ HTTP 400
+ с `status=fail` и `error=token not verified` на этапе проверки кода считается
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 318a96d..68262e8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,7 +52,7 @@ endif ()
+ project(vkpcnx)
+ set(VERSION_MAJOR "1")
+ set(VERSION_MINOR "1")
+-set(VERSION_ALTER "2")
++set(VERSION_ALTER "3")
+ set(VERSION_BUILD "0")
+ set(PROJECT_DISPLAY_NAME "Cloud Lite NX")
+ set(PROJECT_AUTHOR "m4l3vich and Cloud Lite NX contributors")
+diff --git a/NOTICE b/NOTICE
+index 120a0bf..aa885ae 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -1,4 +1,4 @@
+-Cloud Lite NX 1.1.2 — modified version of VKPCNX.
++Cloud Lite NX 1.1.3 — modified version of VKPCNX.
+ Upstream: https://github.com/m4l3vich/vkpcnx
+ Base commit: 8283e8eebe2e7f884746be0b6a36a66904ceecc5
+ Original author: m4l3vich. Original LICENSE is retained (Apache License 2.0).
+diff --git a/tests/auth_reply_test.cpp b/tests/auth_reply_test.cpp
+index e14b808..bbc617e 100644
+--- a/tests/auth_reply_test.cpp
++++ b/tests/auth_reply_test.cpp
+@@ -50,5 +50,29 @@ int main() {
+   check(Stage::Exchange,200,0,R"({"access_token":null})",State::Failed);
+   check(Stage::Exchange,200,0,R"({"access_token":""})",State::Failed);
+   check(Stage::Exchange,200,0,"{}",State::Failed);
++  PollReplies polling;
++  auto poll = [&](long http, int transport, const std::string &body, State expected) {
++    auto r = polling.next(http, transport, body);
++    assert(r.state == expected);
++    assert(r.message.find("SECRET_TOKEN") == std::string::npos);
++    if (transport == 28) assert(!r.message.empty());
++    ++count;
++  };
++  // Reproduce the report: normal waiting followed by a connection timeout.
++  poll(400,0,waiting,State::Pending);
++  poll(0,28,"",State::Pending);
++  poll(0,28,"",State::Pending);
++  poll(200,0,R"({"oauth2_code":"SECRET_TOKEN"})",State::Ready);
++  // A response resets the budget; three consecutive timeouts still fail.
++  poll(0,28,"",State::Pending);
++  poll(0,28,"",State::Pending);
++  poll(0,28,"",State::Failed);
++  poll(0,28,"",State::Failed);
++  poll(400,0,waiting,State::Pending);
++  poll(0,28,"",State::Pending);
++  // Certificate failures, other HTTP 400 errors and server errors are not hidden.
++  poll(0,60,"",State::Failed);
++  poll(400,0,R"({"error":"invalid token"})",State::Failed);
++  poll(503,0,"{}",State::Failed);
+   std::cout << count << " auth response scenarios passed\n";
+ }
+diff --git a/vkpcnx/include/core/auth/reply.hpp b/vkpcnx/include/core/auth/reply.hpp
+index cadbb40..d0e4b29 100644
+--- a/vkpcnx/include/core/auth/reply.hpp
++++ b/vkpcnx/include/core/auth/reply.hpp
+@@ -58,4 +58,23 @@ inline Reply parse(Stage stage, long status, int transport, const std::string &b
+   }
+   return {State::Failed, {}, "Ответ сервера не соответствует ожидаемому формату входа."};
+ }
++// Only polling is safe to repeat here. Never automatically repeat the OAuth
++// code exchange: the server may already have consumed that one-use code.
++class PollReplies {
++  unsigned consecutiveTimeouts = 0;
++public:
++  Reply next(long status, int transport, const std::string &body) {
++    auto reply = parse(Stage::Poll, status, transport, body);
++    if (transport == 28) {
++      if (consecutiveTimeouts < 2) {
++        ++consecutiveTimeouts;
++        return {State::Pending, {}, "Связь прервалась. Повторяем проверку входа (" +
++          std::to_string(consecutiveTimeouts) + "/2)…"};
++      }
++    } else {
++      consecutiveTimeouts = 0;
++    }
++    return reply;
++  }
++};
+ } // namespace vkpcnx::auth
+diff --git a/vkpcnx/src/activity/login_activity.cpp b/vkpcnx/src/activity/login_activity.cpp
+index c696914..10ac575 100644
+--- a/vkpcnx/src/activity/login_activity.cpp
++++ b/vkpcnx/src/activity/login_activity.cpp
+@@ -73,11 +73,20 @@ void LoginActivity::startLogin() {
+         });
+         const auto deadline = std::chrono::steady_clock::now() +
+           std::chrono::seconds(vkpcnx::utils::AUTH_PULL_TOKEN_LIFETIME);
++        PollReplies polling;
+         while (active->load() && std::chrono::steady_clock::now() < deadline) {
+-          auto poll = request(Stage::Poll, vkpcnx::utils::AUTH_API_BASE + "/tvauth/forward/verify",
+-                              {{"token", token}});
++          auto response = Http::postJson(vkpcnx::utils::AUTH_API_BASE + "/tvauth/forward/verify",
++                                        {{"token", token}});
+           if (!active->load()) return;
++          if (std::chrono::steady_clock::now() >= deadline) break;
++          auto poll = polling.next(response.status, response.transportCode, response.body);
+           if (poll.state == State::Failed) { fail(poll.message); return; }
++          if (poll.state == State::Pending && !poll.message.empty()) {
++            brls::Logger::warning("login polling: {}", poll.message);
++            brls::sync([active, message = poll.message] {
++              if (active->load()) brls::Application::notify(message);
++            });
++          }
+           if (poll.state == State::Ready) {
+             auto exchange = request(Stage::Exchange, vkpcnx::utils::OAUTH_TOKEN_ENDPOINT,
+               {{"client_id", vkpcnx::utils::OAUTH_CLIENT_ID}, {"code", poll.data.at("oauth2_code")}});
