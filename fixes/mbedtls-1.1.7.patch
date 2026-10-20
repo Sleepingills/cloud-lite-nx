@@ -154,10 +154,23 @@ index 5b22056..7ccdab5 100644
  /* No /dev/urandom or getrandom(): entropy comes from mbedtls_hardware_poll()
   * (vkpcnx/src/core/platform/switch_mbedtls_platform.cpp → libnx randomGet). */
 diff --git a/scripts/test-http-tls.py b/scripts/test-http-tls.py
-index 7db4b2c..289ea38 100644
+index 7db4b2c..301a0e3 100644
 --- a/scripts/test-http-tls.py
 +++ b/scripts/test-http-tls.py
-@@ -38,7 +38,8 @@ with tempfile.TemporaryDirectory(prefix="cloud-lite-tls-") as tmp:
+@@ -18,7 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
+ 
+ 
+ def run(args, **kwargs):
+-    return subprocess.run(args, check=True, capture_output=True, text=True, **kwargs)
++    result = subprocess.run(args, capture_output=True, text=True, **kwargs)
++    if result.returncode:
++        print(result.stdout, result.stderr, flush=True)
++        result.check_returncode()
++    return result
+ 
+ 
+ class Handler(http.server.BaseHTTPRequestHandler):
+@@ -38,7 +42,8 @@ with tempfile.TemporaryDirectory(prefix="cloud-lite-tls-") as tmp:
      binary = work / "probe"
      # http.cpp and tls.cpp have no Switch SDK dependency. Only their
      # missing-resource policy is selected; TLS itself uses host libcurl.
@@ -169,10 +182,10 @@ index 7db4b2c..289ea38 100644
           "-I" + str(ROOT / "tests/http_host"),
 diff --git a/scripts/test-mbedtls-http.sh b/scripts/test-mbedtls-http.sh
 new file mode 100644
-index 0000000..52d5203
+index 0000000..8a7cb1a
 --- /dev/null
 +++ b/scripts/test-mbedtls-http.sh
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,53 @@
 +#!/usr/bin/env bash
 +# Build the release's HTTPS backend on Linux and exercise real TLS validation.
 +set -euo pipefail
@@ -215,6 +228,7 @@ index 0000000..52d5203
 +  -DMBEDCRYPTO_LIBRARY="$TEST_PREFIX/lib/libmbedcrypto.a"
 +cmake --build "$TEST_ROOT/curl-build" --parallel 2 --target install
 +export CURL_CONFIG="$TEST_PREFIX/bin/curl-config"
++export LIBRARY_PATH="$TEST_PREFIX/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 +"$TEST_PREFIX/bin/curl" --version
 +python3 scripts/test-http-tls.py
 +
