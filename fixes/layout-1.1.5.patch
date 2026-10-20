@@ -1,0 +1,99 @@
+diff --git a/CLOUD-LITE-START-HERE.md b/CLOUD-LITE-START-HERE.md
+index 7725e20..2c52452 100644
+--- a/CLOUD-LITE-START-HERE.md
++++ b/CLOUD-LITE-START-HERE.md
+@@ -1,4 +1,9 @@
+-# Cloud Lite NX — исходный проект, версия 1.1.4
++# Cloud Lite NX — исходный проект, версия 1.1.5
++
++Версия 1.1.5: устранён повторный вход в расчёт разметки при размещении кнопки
++обновления QR. Область нажатия теперь отделена от дерева Yoga и не запускает
++перерасчёт родительского экрана из его onLayout(). Требуется проверка запуска
++на консоли: предпросмотр отрисовки этот путь инициализации не выполняет.
+ 
+ Версия 1.1.4: новый экран входа по пользовательскому макету, плавно движущиеся
+ синие ленты и прозрачные квадраты на фоне. QR-код и текст остаются неподвижными.
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index aeeead3..ca21a0c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,7 +52,7 @@ endif ()
+ project(vkpcnx)
+ set(VERSION_MAJOR "1")
+ set(VERSION_MINOR "1")
+-set(VERSION_ALTER "4")
++set(VERSION_ALTER "5")
+ set(VERSION_BUILD "0")
+ set(PROJECT_DISPLAY_NAME "Cloud Lite NX")
+ set(PROJECT_AUTHOR "m4l3vich and Cloud Lite NX contributors")
+diff --git a/NOTICE b/NOTICE
+index c6f2234..0d403ef 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -1,4 +1,4 @@
+-Cloud Lite NX 1.1.4 — modified version of VKPCNX.
++Cloud Lite NX 1.1.5 — modified version of VKPCNX.
+ Upstream: https://github.com/m4l3vich/vkpcnx
+ Base commit: 8283e8eebe2e7f884746be0b6a36a66904ceecc5
+ Original author: m4l3vich. Original LICENSE is retained (Apache License 2.0).
+diff --git a/vkpcnx/include/view/login_screen.hpp b/vkpcnx/include/view/login_screen.hpp
+index 3e0f156..a1939f6 100644
+--- a/vkpcnx/include/view/login_screen.hpp
++++ b/vkpcnx/include/view/login_screen.hpp
+@@ -23,7 +23,7 @@ public:
+ private:
+   LoginSceneState scene;
+   std::optional<qrcodegen::QrCode> qr;
+-  brls::Box *refreshTarget;
++  brls::Box *refreshTarget = nullptr;
+   std::function<void()> refresh;
+   const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+ };
+diff --git a/vkpcnx/src/view/login_scene.cpp b/vkpcnx/src/view/login_scene.cpp
+index b545835..b9aa144 100644
+--- a/vkpcnx/src/view/login_scene.cpp
++++ b/vkpcnx/src/view/login_scene.cpp
+@@ -181,7 +181,7 @@ void drawLoginScene(NVGcontext *v,double seconds,int font,
+   nvgBeginPath(v); nvgMoveTo(v,0,650); nvgLineTo(v,1280,650);
+   nvgStrokeColor(v,nvgRGBA(109,158,219,64)); nvgStrokeWidth(v,1); nvgStroke(v);
+   keyHint(v,64,684,"B","Выйти"); keyHint(v,925,684,"Y","Отчёт");
+-  text(v,1232,684,13,"Cloud Lite NX  1.1.4",muted(),NVG_ALIGN_RIGHT);
++  text(v,1232,684,13,"Cloud Lite NX  1.1.5",muted(),NVG_ALIGN_RIGHT);
+   nvgRestore(v);
+ }
+ } // namespace vkpcnx
+diff --git a/vkpcnx/src/view/login_screen.cpp b/vkpcnx/src/view/login_screen.cpp
+index aadbcf3..65e8fda 100644
+--- a/vkpcnx/src/view/login_screen.cpp
++++ b/vkpcnx/src/view/login_screen.cpp
+@@ -6,7 +6,10 @@ LoginScreen::LoginScreen() {
+   setBackgroundColor(nvgRGB(3,10,24));
+   refreshTarget = new brls::Box();
+   refreshTarget->setId("login/refresh");
+-  refreshTarget->setPositionType(brls::PositionType::ABSOLUTE);
++  // This hit target is positioned by our canvas transform. Keep it outside
++  // the parent's Yoga tree: resizing an attached child from onLayout()
++  // invalidates the parent and recursively re-enters onLayout().
++  refreshTarget->detach();
+   refreshTarget->setFocusable(true);
+   refreshTarget->setHideHighlight(true);
+   refreshTarget->setHideClickAnimation(true);
+@@ -34,10 +37,15 @@ void LoginScreen::setStatus(const std::string &message, bool canRefresh) {
+   scene.status = message; scene.canRefresh = canRefresh;
+ }
+ void LoginScreen::onLayout() {
++  if (!refreshTarget) return;
+   const float scale = std::min(getWidth()/LOGIN_WIDTH,getHeight()/LOGIN_HEIGHT);
+-  refreshTarget->setPositionLeft((getWidth()-LOGIN_WIDTH*scale)/2+REFRESH_X*scale);
+-  refreshTarget->setPositionTop((getHeight()-LOGIN_HEIGHT*scale)/2+REFRESH_Y*scale);
+-  refreshTarget->setDimensions(REFRESH_W*scale,REFRESH_H*scale);
++  if (!(scale > 0)) return;
++  refreshTarget->setDetachedPosition(
++    (getWidth()-LOGIN_WIDTH*scale)/2+REFRESH_X*scale,
++    (getHeight()-LOGIN_HEIGHT*scale)/2+REFRESH_Y*scale);
++  if (refreshTarget->getWidth() != REFRESH_W*scale ||
++      refreshTarget->getHeight() != REFRESH_H*scale)
++    refreshTarget->setDimensions(REFRESH_W*scale,REFRESH_H*scale);
+ }
+ void LoginScreen::draw(NVGcontext *v,float x,float y,float width,float height,
+                        brls::Style style,brls::FrameContext *ctx) {
