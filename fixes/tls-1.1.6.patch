@@ -1,0 +1,295 @@
+diff --git a/CLOUD-LITE-START-HERE.md b/CLOUD-LITE-START-HERE.md
+index 2c52452..908d148 100644
+--- a/CLOUD-LITE-START-HERE.md
++++ b/CLOUD-LITE-START-HERE.md
+@@ -1,4 +1,11 @@
+-# Cloud Lite NX — исходный проект, версия 1.1.5
++# Cloud Lite NX — исходный проект, версия 1.1.6
++
++Версия 1.1.6: HTTP-клиент явно подключает встроенный файл доверенных
++сертификатов cacert.pem, в том числе при обмене кода входа на токен.
++Проверка сертификата и имени сервера остаётся включённой. Если файл
++не доступен на Switch, приложение показывает код 77 и пишет причину в журнал.
++Код 60 сам по себе не означает неверную дату: если дата и время верны,
++нужен новый отчёт кнопкой Y непосредственно после ошибки.
+ 
+ Версия 1.1.5: устранён повторный вход в расчёт разметки при размещении кнопки
+ обновления QR. Область нажатия теперь отделена от дерева Yoga и не запускает
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ca21a0c..cea1a0b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,7 +52,7 @@ endif ()
+ project(vkpcnx)
+ set(VERSION_MAJOR "1")
+ set(VERSION_MINOR "1")
+-set(VERSION_ALTER "5")
++set(VERSION_ALTER "6")
+ set(VERSION_BUILD "0")
+ set(PROJECT_DISPLAY_NAME "Cloud Lite NX")
+ set(PROJECT_AUTHOR "m4l3vich and Cloud Lite NX contributors")
+diff --git a/NOTICE b/NOTICE
+index 0d403ef..5d52428 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -1,4 +1,4 @@
+-Cloud Lite NX 1.1.5 — modified version of VKPCNX.
++Cloud Lite NX 1.1.6 — modified version of VKPCNX.
+ Upstream: https://github.com/m4l3vich/vkpcnx
+ Base commit: 8283e8eebe2e7f884746be0b6a36a66904ceecc5
+ Original author: m4l3vich. Original LICENSE is retained (Apache License 2.0).
+diff --git a/scripts/test-http-tls.py b/scripts/test-http-tls.py
+new file mode 100644
+index 0000000..7db4b2c
+--- /dev/null
++++ b/scripts/test-http-tls.py
+@@ -0,0 +1,95 @@
++#!/usr/bin/env python3
++"""Exercise the real HTTP client against a local HTTPS server (no credentials).
++
++Requires a host C++ compiler, libcurl development files, Python and openssl.
++Uses Switch's missing-bundle policy, but host libcurl rather than libnx SSL.
++"""
++import http.server
++import os
++from pathlib import Path
++import shlex
++import shutil
++import ssl
++import subprocess
++import tempfile
++import threading
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def run(args, **kwargs):
++    return subprocess.run(args, check=True, capture_output=True, text=True, **kwargs)
++
++
++class Handler(http.server.BaseHTTPRequestHandler):
++    def do_GET(self):
++        payload = b"tls-test-ok"
++        self.send_response(200)
++        self.send_header("Content-Length", str(len(payload)))
++        self.end_headers()
++        self.wfile.write(payload)
++
++    def log_message(self, *args):
++        pass
++
++
++with tempfile.TemporaryDirectory(prefix="cloud-lite-tls-") as tmp:
++    work = Path(tmp)
++    binary = work / "probe"
++    # http.cpp and tls.cpp have no Switch SDK dependency. Only their
++    # missing-resource policy is selected; TLS itself uses host libcurl.
++    flags = shlex.split(run(["curl-config", "--cflags", "--libs"]).stdout)
++    run([os.environ.get("CXX", "g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror",
++         "-D__SWITCH__", '-DBRLS_RESOURCES="./resources/"',
++         "-I" + str(ROOT / "tests/http_host"),
++         "-I" + str(ROOT / "vkpcnx/include"),
++         "-I" + str(ROOT / "library/borealis/library/include"),
++         "-I" + str(ROOT / "library/borealis/library/include/borealis/extern"),
++         str(ROOT / "tests/http_tls_probe.cpp"),
++         str(ROOT / "vkpcnx/src/core/http.cpp"),
++         str(ROOT / "vkpcnx/src/core/utils/tls.cpp"),
++         "-pthread", "-o", str(binary)] + flags)
++
++    for name in ("ca", "other-ca"):
++        run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
++             "-days", "1", "-subj", "/CN=" + name,
++             "-keyout", str(work / (name + ".key")),
++             "-out", str(work / (name + ".pem"))])
++    run(["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
++         "-keyout", str(work / "server.key"), "-out", str(work / "server.csr")])
++    (work / "extensions").write_text(
++        "subjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n")
++    run(["openssl", "x509", "-req", "-in", str(work / "server.csr"),
++         "-CA", str(work / "ca.pem"), "-CAkey", str(work / "ca.key"),
++         "-CAcreateserial", "-days", "1", "-extfile", str(work / "extensions"),
++         "-out", str(work / "server.pem")])
++
++    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
++    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
++    context.load_cert_chain(work / "server.pem", work / "server.key")
++    server.socket = context.wrap_socket(server.socket, server_side=True)
++    worker = threading.Thread(target=server.serve_forever, daemon=True)
++    worker.start()
++    env = dict(os.environ, NO_PROXY="*", no_proxy="*")
++    (work / "resources").mkdir()
++    bundle = work / "resources/cacert.pem"
++    cases = [
++        ("trusted CA", "ca.pem", "localhost", "0 200"),
++        ("untrusted CA", "other-ca.pem", "localhost", "60 0"),
++        ("hostname mismatch", "ca.pem", "127.0.0.1", "60 0"),
++        ("missing bundle", None, "localhost", "77 0"),
++    ]
++    try:
++        for name, ca, host, expected in cases:
++            if ca:
++                shutil.copyfile(work / ca, bundle)
++            else:
++                bundle.unlink()
++            url = f"https://{host}:{server.server_port}/"
++            actual = run([str(binary), url], cwd=work, env=env, timeout=15).stdout.strip()
++            assert actual == expected, f"{name}: expected {expected}, got {actual}"
++            print(f"PASS: {name}")
++    finally:
++        server.shutdown()
++        server.server_close()
++        worker.join()
+diff --git a/tests/auth_reply_test.cpp b/tests/auth_reply_test.cpp
+index 292f001..c1a4cd1 100644
+--- a/tests/auth_reply_test.cpp
++++ b/tests/auth_reply_test.cpp
+@@ -12,7 +12,7 @@ int main() {
+     ++count;
+   };
+   for (auto stage : {Stage::Init, Stage::Poll, Stage::Exchange}) {
+-    for (int code : {6, 7, 28, 35, 60}) check(stage, 0, code, "", State::Failed);
++    for (int code : {6, 7, 28, 35, 60, 77}) check(stage, 0, code, "", State::Failed);
+     for (long status : {401, 403, 429, 500, 503})
+       check(stage, status, 0, R"({"token":"SECRET_TOKEN"})", State::Failed);
+     for (const char *body : {"<html>gateway</html>", "null", "[]", "{", "42"})
+diff --git a/tests/http_host/borealis.hpp b/tests/http_host/borealis.hpp
+new file mode 100644
+index 0000000..5764ef2
+--- /dev/null
++++ b/tests/http_host/borealis.hpp
+@@ -0,0 +1,11 @@
++#pragma once
++// UI-only stand-in for host HTTPS tests. Http and libcurl are the real code.
++#include <functional>
++namespace brls {
++struct Logger {
++  template <typename... Args> static void info(const char *, Args &&...) {}
++  template <typename... Args> static void error(const char *, Args &&...) {}
++  template <typename... Args> static void debug(const char *, Args &&...) {}
++};
++inline void sync(std::function<void()> fn) { fn(); }
++}
+diff --git a/tests/http_tls_probe.cpp b/tests/http_tls_probe.cpp
+new file mode 100644
+index 0000000..343dca3
+--- /dev/null
++++ b/tests/http_tls_probe.cpp
+@@ -0,0 +1,17 @@
++#include "core/http.hpp"
++#include "core/utils/thread.hpp"
++#include <iostream>
++#include <thread>
++
++// The asynchronous UI path is not exercised by this test.
++void vkpcnx::utils::runDetached(std::function<void()> fn) {
++  std::thread(std::move(fn)).detach();
++}
++int main(int argc, char **argv) {
++  if (argc != 2) return 2;
++  Http::init();
++  auto response = Http::get(argv[1]);
++  std::cout << response.transportCode << ' ' << response.status << '\n';
++  if (response.transportCode == 0 && response.body != "tls-test-ok") return 3;
++  Http::shutdown();
++}
+diff --git a/vkpcnx/include/core/auth/reply.hpp b/vkpcnx/include/core/auth/reply.hpp
+index 078cb1d..7e9bad8 100644
+--- a/vkpcnx/include/core/auth/reply.hpp
++++ b/vkpcnx/include/core/auth/reply.hpp
+@@ -23,8 +23,12 @@ inline Reply parse(Stage stage, long status, int transport, const std::string &b
+     case 6: message = "Не удалось найти сервер. Проверьте интернет и DNS."; break;
+     case 7: message = "Не удалось подключиться к серверу."; break;
+     case 28: message = "Сервер не ответил вовремя. Можно повторить подключение."; break;
+-    case 35: case 60:
++    case 35:
+       message = "Ошибка защищённого соединения. Проверьте дату и время консоли."; break;
++    case 60:
++      message = "Не удалось проверить сертификат. Проверьте дату и время. Если они верны — нажмите Y для отчёта."; break;
++    case 77:
++      message = "Не удалось загрузить сертификаты приложения. Нажмите Y для отчёта."; break;
+     default: message = "Ошибка сети. Проверьте подключение к интернету."; break;
+     }
+     return {State::Failed, {}, message + " Код сети: " + std::to_string(transport)};
+diff --git a/vkpcnx/src/core/http.cpp b/vkpcnx/src/core/http.cpp
+index 09b78d2..0373dab 100644
+--- a/vkpcnx/src/core/http.cpp
++++ b/vkpcnx/src/core/http.cpp
+@@ -2,6 +2,7 @@
+ #include "core/http.hpp"
+ 
+ #include "core/utils/thread.hpp"
++#include "core/utils/tls.hpp"
+ #include <borealis.hpp>
+ #include <curl/curl.h>
+ #include <mutex>
+@@ -46,6 +47,9 @@ static size_t writeHeader(char *ptr, size_t size, size_t nmemb, void *userdata)
+ void Http::init() {
+   // On Switch, socketInitializeDefault() is already done by switch_wrapper.c
+   curl_global_init(CURL_GLOBAL_DEFAULT);
++  const auto *version = curl_version_info(CURLVERSION_NOW);
++  brls::Logger::info("Http: curl {}, TLS backend {}", version->version,
++                      version->ssl_version ? version->ssl_version : "unknown");
+ }
+ 
+ void Http::shutdown() { curl_global_cleanup(); }
+@@ -88,6 +92,32 @@ Http::Response Http::perform(
+     return res;
+   }
+ 
++  // The Switch curl backend uses the console's SSL service. Its built-in
++  // roots can differ from the bundled Mozilla roots used by our WebSockets.
++  // Explicitly import the same bundle for HTTPS, including OAuth exchange.
++  const std::string caBundle = vkpcnx::utils::caBundlePath();
++#ifdef __SWITCH__
++  if (caBundle.empty()) {
++    res.transportCode = CURLE_SSL_CACERT_BADFILE;
++    res.error = "Bundled CA certificate file is missing";
++    brls::Logger::error("Http: {}", res.error);
++    curl_easy_cleanup(curl);
++    return res;
++  }
++#endif
++  CURLcode tlsSetup = curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
++  if (tlsSetup == CURLE_OK)
++    tlsSetup = curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
++  if (tlsSetup == CURLE_OK && !caBundle.empty())
++    tlsSetup = curl_easy_setopt(curl, CURLOPT_CAINFO, caBundle.c_str());
++  if (tlsSetup != CURLE_OK) {
++    res.transportCode = static_cast<int>(tlsSetup);
++    res.error = curl_easy_strerror(tlsSetup);
++    brls::Logger::error("Http: TLS setup failed ({}): {}", res.transportCode, res.error);
++    curl_easy_cleanup(curl);
++    return res;
++  }
++
+   Headers merged;
+   std::string userAgent;
+   long timeout;
+@@ -133,7 +163,13 @@ Http::Response Http::perform(
+   res.transportCode = static_cast<int>(rc);
+   if (rc != CURLE_OK) {
+     res.error = errbuf[0] ? errbuf : curl_easy_strerror(rc);
+-    brls::Logger::error("Http: {} {} failed: {}", method, url, res.error);
++    brls::Logger::error("Http: {} {} failed (network {}): {}", method, url,
++                         res.transportCode, res.error);
++    if (rc == CURLE_PEER_FAILED_VERIFICATION || rc == CURLE_SSL_CONNECT_ERROR ||
++        rc == CURLE_SSL_CACERT_BADFILE) {
++      brls::Logger::error("Http: TLS CA source: {}",
++                           caBundle.empty() ? "system store" : caBundle);
++    }
+   } else {
+     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &res.status);
+     brls::Logger::debug("Http: {} {} -> {}", method, url, res.status);
+diff --git a/vkpcnx/src/view/login_scene.cpp b/vkpcnx/src/view/login_scene.cpp
+index b9aa144..2024e75 100644
+--- a/vkpcnx/src/view/login_scene.cpp
++++ b/vkpcnx/src/view/login_scene.cpp
+@@ -181,7 +181,7 @@ void drawLoginScene(NVGcontext *v,double seconds,int font,
+   nvgBeginPath(v); nvgMoveTo(v,0,650); nvgLineTo(v,1280,650);
+   nvgStrokeColor(v,nvgRGBA(109,158,219,64)); nvgStrokeWidth(v,1); nvgStroke(v);
+   keyHint(v,64,684,"B","Выйти"); keyHint(v,925,684,"Y","Отчёт");
+-  text(v,1232,684,13,"Cloud Lite NX  1.1.5",muted(),NVG_ALIGN_RIGHT);
++  text(v,1232,684,13,"Cloud Lite NX  1.1.6",muted(),NVG_ALIGN_RIGHT);
+   nvgRestore(v);
+ }
+ } // namespace vkpcnx
