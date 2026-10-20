@@ -22,6 +22,7 @@ jobs:
           unzip -q Cloud-Lite-NX-source.zip -d source
           git apply --directory=source/Cloud-Lite-NX fixes/polling-1.1.2.patch
           git apply --directory=source/Cloud-Lite-NX fixes/timeouts-1.1.3.patch
+          git apply --directory=source/Cloud-Lite-NX fixes/ui-network-1.1.4.patch
           chmod +x source/Cloud-Lite-NX/scripts/*.sh
 
       - name: Build Switch application

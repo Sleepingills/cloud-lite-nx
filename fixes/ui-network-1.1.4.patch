@@ -1,0 +1,613 @@
+diff --git a/CLOUD-LITE-START-HERE.md b/CLOUD-LITE-START-HERE.md
+index 39b16f8..7725e20 100644
+--- a/CLOUD-LITE-START-HERE.md
++++ b/CLOUD-LITE-START-HERE.md
+@@ -1,4 +1,9 @@
+-# Cloud Lite NX — исходный проект, версия 1.1.3
++# Cloud Lite NX — исходный проект, версия 1.1.4
++
++Версия 1.1.4: новый экран входа по пользовательскому макету, плавно движущиеся
++синие ленты и прозрачные квадраты на фоне. QR-код и текст остаются неподвижными.
++X обновляет код; A или касание кнопки делают то же. B / + — выход, Y — отчёт.
++Рендеринг выполняется векторно, без видеофона, дополнительных загрузок или потоков.
+ 
+ В версии 1.1.3 одиночный тайм-аут проверки входа больше не закрывает QR-код.
+ Приложение делает до двух повторов с уведомлением; третья подряд ошибка 28
+@@ -74,7 +79,7 @@ Linux/macOS с Docker:
+ 
+ ## Что проверено
+ 
+-- 59 сценариев парсинга ответов авторизации: tests/auth_reply_test.cpp.
++- 105 сценариев ответов авторизации и ограниченных повторов: tests/auth_reply_test.cpp.
+ - Соответствие идентификаторов элементов интерфейса коду; отсутствие дублей.
+ - Проверка C++17 (-fsyntax-only) изменённых файлов login_activity.cpp,
+   main_activity.cpp, vkpcapi.cpp, account_info.cpp и http.cpp с заголовками Borealis.
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 68262e8..aeeead3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,7 +52,7 @@ endif ()
+ project(vkpcnx)
+ set(VERSION_MAJOR "1")
+ set(VERSION_MINOR "1")
+-set(VERSION_ALTER "3")
++set(VERSION_ALTER "4")
+ set(VERSION_BUILD "0")
+ set(PROJECT_DISPLAY_NAME "Cloud Lite NX")
+ set(PROJECT_AUTHOR "m4l3vich and Cloud Lite NX contributors")
+diff --git a/NOTICE b/NOTICE
+index aa885ae..c6f2234 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -1,4 +1,4 @@
+-Cloud Lite NX 1.1.3 — modified version of VKPCNX.
++Cloud Lite NX 1.1.4 — modified version of VKPCNX.
+ Upstream: https://github.com/m4l3vich/vkpcnx
+ Base commit: 8283e8eebe2e7f884746be0b6a36a66904ceecc5
+ Original author: m4l3vich. Original LICENSE is retained (Apache License 2.0).
+diff --git a/resources/xml/activity/login.xml b/resources/xml/activity/login.xml
+index 7d06714..a724ece 100644
+--- a/resources/xml/activity/login.xml
++++ b/resources/xml/activity/login.xml
+@@ -1,38 +1,2 @@
+-<!-- Modified for Cloud Lite NX: startup status and recovery controls. -->
+-<brls:AppletFrame id="login/root">
+-  <brls:Box padding="30" width="auto" height="auto">
+-    <brls:Box id="login/spinner" alignItems="center" justifyContent="center" grow="1">
+-      <brls:ProgressSpinner id="login/spinnerIcon" size="large" width="100" height="100"/>
+-    </brls:Box>
+-    <brls:Box visibility="gone" id="login/error" axis="column" alignItems="center" justifyContent="center" grow="1">
+-      <brls:Label text="Не удалось войти" fontSize="30" marginBottom="20" />
+-      <brls:Label id="login/errorText" horizontalAlign="center" width="1000" marginBottom="24" />
+-      <brls:Label text="X — повторить вход     Y — сохранить отчёт     + — выйти" horizontalAlign="center" />
+-    </brls:Box>
+-    <brls:Box visibility="gone" id="login/content" axis="column" alignItems="center" justifyContent="center" grow="1">
+-      <brls:Label text="Войдите в учетную запись VK Play Cloud" fontSize="32" marginBottom="20" />
+-
+-      <brls:Box axis="row" alignItems="center" justifyContent="center" grow="1" width="100%">
+-        <brls:Box axis="column" alignItems="center" grow="1" width="0">
+-          <brls:Label text="Считайте QR-код с помощью камеры вашего смарт-устройства" marginBottom="20" alpha="0.75" horizontalAlign="center" />
+-          <brls:Box padding="16" backgroundColor="#ffffff" cornerRadius="8">
+-            <vkpcnx:QrCode id="login/qrcode" width="256" height="256"/>
+-          </brls:Box>
+-        </brls:Box>
+-
+-        <brls:Box axis="column" alignItems="center" height="100%" alpha="0.5">
+-          <brls:Box lineColor="@theme/brls/applet_frame/separator" lineRight="1px" grow="1"/>
+-          <brls:Label text="или" margin="20"/>
+-          <brls:Box lineColor="@theme/brls/applet_frame/separator" lineRight="1px" grow="1"/>
+-        </brls:Box>
+-
+-        <brls:Box axis="column" alignItems="center" grow="1" width="0">
+-          <brls:Label horizontalAlign="center" text="Откройте в браузере страницу" marginBottom="20" alpha="0.75"/>
+-          <brls:Label horizontalAlign="center" text="cloud.vkplay.ru/tv" marginBottom="20" fontSize="28" />
+-          <brls:Label horizontalAlign="center" text="и введите код" marginBottom="20" alpha="0.75" />
+-          <brls:Label horizontalAlign="center" id="login/pairCode" marginBottom="20" fontSize="28" />
+-        </brls:Box>
+-      </brls:Box>
+-    </brls:Box>
+-  </brls:Box>
+-</brls:AppletFrame>
+\ No newline at end of file
++<!-- Cloud Lite NX: animated full-screen login scene, native NanoVG renderer. -->
++<vkpcnx:LoginScreen id="login/root" width="100%" height="100%"/>
+diff --git a/tests/auth_reply_test.cpp b/tests/auth_reply_test.cpp
+index bbc617e..292f001 100644
+--- a/tests/auth_reply_test.cpp
++++ b/tests/auth_reply_test.cpp
+@@ -74,5 +74,21 @@ int main() {
+   poll(0,60,"",State::Failed);
+   poll(400,0,R"({"error":"invalid token"})",State::Failed);
+   poll(503,0,"{}",State::Failed);
++  // 11:48 report: timeout followed by DNS failure must keep the same QR alive.
++  poll(400,0,waiting,State::Pending);
++  poll(0,28,"",State::Pending);
++  poll(0,6,"",State::Pending);
++  poll(200,0,R"({"oauth2_code":"SECRET_TOKEN"})",State::Ready);
++  // Alternating transport errors consume one shared, bounded retry budget.
++  poll(0,6,"",State::Pending);
++  poll(0,7,"",State::Pending);
++  poll(0,28,"",State::Failed);
++  poll(0,6,"",State::Failed);
++  poll(400,0,waiting,State::Pending);
++  poll(0,6,"",State::Pending);
++  poll(400,0,waiting,State::Pending);
++  poll(0,6,"",State::Pending);
++  poll(0,6,"",State::Pending);
++  poll(0,6,"",State::Failed);
+   std::cout << count << " auth response scenarios passed\n";
+ }
+diff --git a/vkpcnx/include/activity/login_activity.hpp b/vkpcnx/include/activity/login_activity.hpp
+index 7c33908..86c568e 100644
+--- a/vkpcnx/include/activity/login_activity.hpp
++++ b/vkpcnx/include/activity/login_activity.hpp
+@@ -4,22 +4,22 @@
+ #include "core/settings.hpp"
+ #include "core/utils/thread.hpp"
+ #include "view/debug_report.hpp"
+-#include "view/title_bar.hpp"
++#include "view/login_screen.hpp"
+ #include <atomic>
+ #include <memory>
+ 
+-class LoginActivity : public vkpcnx::CustomTitlebarActivity {
++class LoginActivity : public brls::Activity {
+ public:
+-  LoginActivity() : CustomTitlebarActivity("login/root") {}
+   ~LoginActivity() override { if (attempt) attempt->store(false); }
+   CONTENT_FROM_XML_RES("activity/login.xml");
+-  BRLS_BIND(brls::AppletFrame, appletFrame, "login/root");
+-  void onContentReady() override;
++  BRLS_BIND(vkpcnx::LoginScreen, screen, "login/root");
++  void onContentAvailable() override;
+ private:
+   // Each attempt owns a cancellation flag. Queued UI callbacks check it before
+   // touching this activity, including after destruction or a successful login.
+   std::shared_ptr<std::atomic_bool> attempt;
+   bool busy = false; // UI thread only
++  bool canRestart = false; // UI thread; refresh only after the QR is available
+   void startLogin();
+   void showFailure(const std::string &message);
+ };
+diff --git a/vkpcnx/include/core/auth/reply.hpp b/vkpcnx/include/core/auth/reply.hpp
+index d0e4b29..078cb1d 100644
+--- a/vkpcnx/include/core/auth/reply.hpp
++++ b/vkpcnx/include/core/auth/reply.hpp
+@@ -61,18 +61,20 @@ inline Reply parse(Stage stage, long status, int transport, const std::string &b
+ // Only polling is safe to repeat here. Never automatically repeat the OAuth
+ // code exchange: the server may already have consumed that one-use code.
+ class PollReplies {
+-  unsigned consecutiveTimeouts = 0;
++  unsigned consecutiveNetworkFailures = 0;
+ public:
+   Reply next(long status, int transport, const std::string &body) {
+     auto reply = parse(Stage::Poll, status, transport, body);
+-    if (transport == 28) {
+-      if (consecutiveTimeouts < 2) {
+-        ++consecutiveTimeouts;
++    // DNS/connect failures can follow a timeout during a temporary outage.
++    // Share one budget so alternating error codes cannot retry indefinitely.
++    if (transport == 6 || transport == 7 || transport == 28) {
++      if (consecutiveNetworkFailures < 2) {
++        ++consecutiveNetworkFailures;
+         return {State::Pending, {}, "Связь прервалась. Повторяем проверку входа (" +
+-          std::to_string(consecutiveTimeouts) + "/2)…"};
++          std::to_string(consecutiveNetworkFailures) + "/2)…"};
+       }
+     } else {
+-      consecutiveTimeouts = 0;
++      consecutiveNetworkFailures = 0;
+     }
+     return reply;
+   }
+diff --git a/vkpcnx/include/view/login_scene.hpp b/vkpcnx/include/view/login_scene.hpp
+new file mode 100644
+index 0000000..80e103e
+--- /dev/null
++++ b/vkpcnx/include/view/login_scene.hpp
+@@ -0,0 +1,20 @@
++#pragma once
++// Cloud Lite NX: shared native renderer, also used by the desktop preview.
++#include <nanovg.h>
++#include <qrcodegen.hpp>
++#include <string>
++
++namespace vkpcnx {
++enum class LoginPhase { Loading, Waiting, Error };
++struct LoginSceneState {
++  LoginPhase phase = LoginPhase::Loading;
++  std::string code;
++  std::string status = "Подключаемся…";
++  std::string error;
++  bool canRefresh = false;
++};
++inline constexpr float LOGIN_WIDTH = 1280, LOGIN_HEIGHT = 720;
++inline constexpr float REFRESH_X = 196, REFRESH_Y = 532, REFRESH_W = 446, REFRESH_H = 60;
++void drawLoginScene(NVGcontext *vg, double seconds, int font,
++                    const LoginSceneState &state, const qrcodegen::QrCode *qr);
++} // namespace vkpcnx
+diff --git a/vkpcnx/include/view/login_screen.hpp b/vkpcnx/include/view/login_screen.hpp
+new file mode 100644
+index 0000000..3e0f156
+--- /dev/null
++++ b/vkpcnx/include/view/login_screen.hpp
+@@ -0,0 +1,30 @@
++#pragma once
++#include <borealis.hpp>
++#include "view/login_scene.hpp"
++#include <chrono>
++#include <functional>
++#include <optional>
++
++namespace vkpcnx {
++class LoginScreen : public brls::Box {
++public:
++  LoginScreen();
++  // Keep a live focus target in every phase, including loading/error. Otherwise
++  // closing a report dialog can leave Borealis focused on its deleted button.
++  brls::View *getDefaultFocus() override { return refreshTarget; }
++  void setLoading();
++  void setPairing(const std::string &code, const std::string &url);
++  void setError(const std::string &message);
++  void setStatus(const std::string &message, bool canRefresh);
++  void setRefreshHandler(std::function<void()> handler) { refresh = std::move(handler); }
++  void onLayout() override;
++  void draw(NVGcontext *, float, float, float, float, brls::Style, brls::FrameContext *) override;
++  static brls::View *create() { return new LoginScreen(); }
++private:
++  LoginSceneState scene;
++  std::optional<qrcodegen::QrCode> qr;
++  brls::Box *refreshTarget;
++  std::function<void()> refresh;
++  const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
++};
++} // namespace vkpcnx
+diff --git a/vkpcnx/src/activity/login_activity.cpp b/vkpcnx/src/activity/login_activity.cpp
+index 10ac575..a489c63 100644
+--- a/vkpcnx/src/activity/login_activity.cpp
++++ b/vkpcnx/src/activity/login_activity.cpp
+@@ -5,43 +5,41 @@
+ #include "core/http.hpp"
+ #include "core/utils/config.hpp"
+ #include "core/utils/device.hpp"
+-#include "view/qrcode.hpp"
+ #include <chrono>
+ #include <thread>
+ 
+-void LoginActivity::onContentReady() {
++void LoginActivity::onContentAvailable() {
+   if (Settings::instance().has("account")) {
+     brls::Application::pushActivity(new MainActivity(), brls::TransitionAnimation::NONE);
+     return;
+   }
+-  appletFrame->registerAction("Отчёт об ошибке", brls::BUTTON_Y, [](brls::View *) {
++  registerAction("Отчёт об ошибке", brls::BUTTON_Y, [](brls::View *) {
+     vkpcnx::openDebugReportDialog(); return true;
+   });
+-  appletFrame->registerAction("Повторить вход", brls::BUTTON_X, [this](brls::View *) {
+-    if (!busy) startLogin();
++  registerAction("Обновить QR-код", brls::BUTTON_X, [this](brls::View *) {
++    startLogin();
+     return true;
+   });
+   registerExitAction();
++  registerExitAction(brls::BUTTON_B);
++  screen->setRefreshHandler([this] { startLogin(); });
+   startLogin();
+ }
+ 
+ void LoginActivity::showFailure(const std::string &message) {
+   busy = false;
+-  getView("login/spinner")->setVisibility(brls::Visibility::GONE);
+-  getView("login/content")->setVisibility(brls::Visibility::GONE);
+-  static_cast<brls::Label *>(getView("login/errorText"))->setText(message);
+-  getView("login/error")->setVisibility(brls::Visibility::VISIBLE);
++  canRestart = true;
++  screen->setError(message);
+ }
+ 
+ void LoginActivity::startLogin() {
+-  if (busy) return;
++  if (busy && !canRestart) return;
+   if (attempt) attempt->store(false);
+   attempt = std::make_shared<std::atomic_bool>(true);
+   auto active = attempt;
+   busy = true;
+-  getView("login/error")->setVisibility(brls::Visibility::GONE);
+-  getView("login/content")->setVisibility(brls::Visibility::GONE);
+-  getView("login/spinner")->setVisibility(brls::Visibility::VISIBLE);
++  canRestart = false;
++  screen->setLoading();
+   auto fail = [this, active](const std::string &message) {
+     // Never log response bodies, pairing tokens or OAuth tokens.
+     brls::Logger::warning("login: {}", message);
+@@ -65,11 +63,8 @@ void LoginActivity::startLogin() {
+         const auto token = init.data.at("token").get<std::string>();
+         brls::sync([this, active, code] {
+           if (!active->load()) return;
+-          static_cast<vkpcnx::QrCode *>(getView("login/qrcode"))->setText(
+-            vkpcnx::utils::PAIRING_QR_LINK_PREFIX + code);
+-          static_cast<brls::Label *>(getView("login/pairCode"))->setText(code);
+-          getView("login/spinner")->setVisibility(brls::Visibility::GONE);
+-          getView("login/content")->setVisibility(brls::Visibility::VISIBLE);
++          screen->setPairing(code, vkpcnx::utils::PAIRING_QR_LINK_PREFIX + code);
++          canRestart = true;
+         });
+         const auto deadline = std::chrono::steady_clock::now() +
+           std::chrono::seconds(vkpcnx::utils::AUTH_PULL_TOKEN_LIFETIME);
+@@ -83,11 +78,21 @@ void LoginActivity::startLogin() {
+           if (poll.state == State::Failed) { fail(poll.message); return; }
+           if (poll.state == State::Pending && !poll.message.empty()) {
+             brls::Logger::warning("login polling: {}", poll.message);
+-            brls::sync([active, message = poll.message] {
+-              if (active->load()) brls::Application::notify(message);
++            brls::sync([this, active] {
++              if (active->load()) screen->setStatus("Повторяем подключение…", true);
++            });
++          }
++          if (poll.state == State::Pending && poll.message.empty()) {
++            brls::sync([this, active] {
++              if (active->load()) screen->setStatus("Ожидание входа", true);
+             });
+           }
+           if (poll.state == State::Ready) {
++            brls::sync([this, active] {
++              if (!active->load()) return;
++              canRestart = false;
++              screen->setStatus("Завершаем вход…", false);
++            });
+             auto exchange = request(Stage::Exchange, vkpcnx::utils::OAUTH_TOKEN_ENDPOINT,
+               {{"client_id", vkpcnx::utils::OAUTH_CLIENT_ID}, {"code", poll.data.at("oauth2_code")}});
+             if (!active->load()) return;
+diff --git a/vkpcnx/src/main.cpp b/vkpcnx/src/main.cpp
+index c59d1b0..c6b169e 100644
+--- a/vkpcnx/src/main.cpp
++++ b/vkpcnx/src/main.cpp
+@@ -22,6 +22,7 @@
+ #include "view/fill_scrolling_frame.hpp"
+ #include "view/onscreen_keyboard.hpp"
+ #include "view/qrcode.hpp"
++#include "view/login_screen.hpp"
+ #include "view/stream_view.hpp"
+ #include "view/striped_list.hpp"
+ 
+@@ -95,6 +96,7 @@ int main(int argc, char *argv[]) {
+     return new vkpcnx::OnscreenKeyboard();
+   });
+   brls::Application::registerXMLView("vkpcnx:QrCode", vkpcnx::QrCode::create);
++  brls::Application::registerXMLView("vkpcnx:LoginScreen", vkpcnx::LoginScreen::create);
+   brls::Application::registerXMLView("vkpcnx:StreamView", [] { return new vkpcnx::StreamView(); });
+   brls::Application::registerXMLView("vkpcnx:StripedList", vkpcnx::StripedList::create);
+   brls::Application::registerXMLView("vkpcnx:StripedListRow", vkpcnx::StripedListRow::create);
+diff --git a/vkpcnx/src/view/login_scene.cpp b/vkpcnx/src/view/login_scene.cpp
+new file mode 100644
+index 0000000..b545835
+--- /dev/null
++++ b/vkpcnx/src/view/login_scene.cpp
+@@ -0,0 +1,187 @@
++// Cloud Lite NX: original vector UI based on the user's login-screen reference.
++#include "view/login_scene.hpp"
++#include <algorithm>
++#include <cmath>
++
++namespace vkpcnx {
++namespace {
++constexpr float PI = 3.14159265358979323846f;
++NVGcolor white() { return nvgRGB(245, 248, 255); }
++NVGcolor muted() { return nvgRGB(178, 197, 229); }
++void rounded(NVGcontext *v, float x, float y, float w, float h, float r, NVGcolor c) {
++  nvgBeginPath(v); nvgRoundedRect(v, x, y, w, h, r); nvgFillColor(v, c); nvgFill(v);
++}
++void outline(NVGcontext *v, float x, float y, float w, float h, float r, NVGcolor c, float line=1) {
++  nvgBeginPath(v); nvgRoundedRect(v, x, y, w, h, r); nvgStrokeColor(v, c);
++  nvgStrokeWidth(v, line); nvgStroke(v);
++}
++void text(NVGcontext *v, float x, float y, float size, const std::string &s,
++          NVGcolor c, int align=NVG_ALIGN_LEFT, bool bold=false) {
++  nvgFontSize(v, size); nvgTextAlign(v, align | NVG_ALIGN_MIDDLE);
++  nvgFillColor(v, c); nvgText(v, x, y, s.c_str(), nullptr);
++  if (bold) nvgText(v, x+0.65f, y, s.c_str(), nullptr);
++}
++void circle(NVGcontext *v, float x, float y, float r, NVGcolor c) {
++  nvgBeginPath(v); nvgCircle(v, x, y, r); nvgFillColor(v, c); nvgFill(v);
++}
++void vkMark(NVGcontext *v, float x, float y, float size) {
++  rounded(v, x, y, size, size, size*.27f, nvgRGB(0, 115, 255));
++  nvgSave(v); nvgTranslate(v, x+size*.17f, y+size*.24f); nvgScale(v, size/60, size/60);
++  // A compact V/K monogram with rounded transitions, drawn as paths.
++  nvgBeginPath(v); nvgMoveTo(v, 0, 0); nvgLineTo(v, 7, 0);
++  nvgBezierTo(v, 8, 12, 12, 20, 18, 22); nvgLineTo(v, 18, 0);
++  nvgLineTo(v, 25, 0); nvgLineTo(v, 25, 13);
++  nvgBezierTo(v, 32, 12, 36, 6, 38, 0); nvgLineTo(v, 46, 0);
++  nvgBezierTo(v, 44, 9, 39, 15, 33, 18);
++  nvgBezierTo(v, 40, 21, 45, 27, 47, 34); nvgLineTo(v, 39, 34);
++  nvgBezierTo(v, 37, 28, 32, 23, 25, 22); nvgLineTo(v, 25, 34);
++  nvgLineTo(v, 22, 34); nvgBezierTo(v, 8, 34, 1, 22, 0, 0);
++  nvgClosePath(v); nvgFillColor(v, nvgRGB(255, 255, 255)); nvgFill(v); nvgRestore(v);
++}
++void consoleIcon(NVGcontext *v, float x, float y) {
++  outline(v,x,y,58,29,8,white(),1.6f); outline(v,x+10,y+4,38,21,2,white(),1.3f);
++  circle(v,x+5,y+10,1.5f,white()); circle(v,x+5,y+19,1.5f,white());
++  circle(v,x+53,y+10,1.2f,white()); circle(v,x+53,y+19,1.2f,white());
++}
++void ribbon(NVGcontext *v, float y, float thickness, float phase, NVGcolor a, NVGcolor b) {
++  const float wave = std::sin(phase)*44, sway = std::cos(phase*.83f)*70;
++  nvgBeginPath(v); nvgMoveTo(v,-110,y-150+wave);
++  nvgBezierTo(v,230,y-80+wave,160,y+270+sway,660,y+95);
++  nvgBezierTo(v,1010,y-55-sway,1100,y+65,1390,y+210-wave);
++  nvgLineTo(v,1390,y+210-wave+thickness);
++  nvgBezierTo(v,1080,y+70+thickness,1030,y-20-sway,660,y+135+thickness);
++  nvgBezierTo(v,150,y+310+sway,140,y-15+wave,-110,y-110+wave+thickness);
++  nvgClosePath(v); nvgFillPaint(v,nvgLinearGradient(v,0,y,1280,y+200,a,b)); nvgFill(v);
++}
++void background(NVGcontext *v, float t) {
++  rounded(v,0,0,1280,720,0,nvgRGB(3,10,24));
++  nvgBeginPath(v); nvgRect(v,0,0,1280,720);
++  nvgFillPaint(v,nvgRadialGradient(v,1120+40*std::sin(t*.1f),60,40,720,
++    nvgRGBA(0,79,191,120),nvgRGBA(0,21,57,0))); nvgFill(v);
++  ribbon(v,190,65,t*.16f,nvgRGBA(0,64,255,225),nvgRGBA(0,155,255,210));
++  ribbon(v,415,35,t*.13f+1.5f,nvgRGBA(0,140,255,190),nvgRGBA(0,65,235,130));
++  ribbon(v,10,28,t*.11f+3,nvgRGBA(0,75,255,110),nvgRGBA(0,110,255,210));
++  // Six translucent shapes remain behind the opaque content card.
++  const float xs[]={28,105,12,1213,1192,1300};
++  const float ys[]={115,320,550,185,410,600};
++  for(int i=0;i<6;i++) {
++    float p=t*.17f+i*1.7f;
++    nvgSave(v); nvgTranslate(v,xs[i]+std::sin(p)*15,ys[i]+std::cos(p*.8f)*23);
++    nvgRotate(v,-.32f+std::sin(p*.7f)*.12f);
++    float side=86+(i%3)*14;
++    nvgBeginPath(v); nvgRoundedRect(v,-side/2,-side/2,side,side,14);
++    nvgFillPaint(v,nvgLinearGradient(v,-side/2,-side/2,side/2,side/2,
++      nvgRGBA(0,145,255,125),nvgRGBA(0,52,173,35))); nvgFill(v);
++    outline(v,-side/2,-side/2,side,side,14,nvgRGBA(30,157,255,140),1.3f);
++    nvgRestore(v);
++  }
++}
++void qrCorners(NVGcontext *v) {
++  const float x=733,y=175,w=336,h=336,r=17,l=30;
++  nvgStrokeColor(v,nvgRGB(0,164,255)); nvgStrokeWidth(v,3.5f); nvgLineCap(v,NVG_ROUND);
++  for(int i=0;i<4;i++) {
++    nvgSave(v); nvgTranslate(v,x+(i%2?w:0),y+(i/2?h:0));
++    nvgScale(v,i%2?-1.f:1.f,i/2?-1.f:1.f);
++    nvgBeginPath(v); nvgMoveTo(v,0,l); nvgLineTo(v,0,r);
++    nvgQuadTo(v,0,0,r,0); nvgLineTo(v,l,0); nvgStroke(v); nvgRestore(v);
++  }
++}
++void drawQr(NVGcontext *v, const qrcodegen::QrCode &qr) {
++  // Keep the four-module white quiet zone; no overlay, logo, or animation on QR.
++  const int count=qr.getSize(), quiet=4;
++  const float module=std::floor(302.f/(count+quiet*2));
++  const float total=(count+quiet*2)*module;
++  const float x=901-total/2+quiet*module, y=343-total/2+quiet*module;
++  nvgSave(v); nvgShapeAntiAlias(v,0); nvgBeginPath(v);
++  for(int row=0;row<count;row++) for(int col=0;col<count;col++)
++    if(qr.getModule(col,row)) nvgRect(v,x+col*module,y+row*module,module,module);
++  nvgFillColor(v,nvgRGB(0,0,0)); nvgFill(v); nvgRestore(v);
++}
++void keyHint(NVGcontext *v,float x,float y,const std::string &key,const std::string &label) {
++  nvgBeginPath(v); nvgCircle(v,x,y,16); nvgStrokeColor(v,white()); nvgStrokeWidth(v,1.6f); nvgStroke(v);
++  text(v,x,y,18,key,white(),NVG_ALIGN_CENTER);
++  text(v,x+32,y,18,label,white());
++}
++} // namespace
++
++void drawLoginScene(NVGcontext *v,double seconds,int font,
++                    const LoginSceneState &s,const qrcodegen::QrCode *qr) {
++  nvgSave(v); nvgFontFaceId(v,font); const float t=static_cast<float>(std::fmod(seconds,3600.0));
++  background(v,t);
++  vkMark(v,46,21,60); text(v,123,52,35,"VK Play",white(),NVG_ALIGN_LEFT,true);
++  consoleIcon(v,1070,35); text(v,1144,50,19,"Switch Lite",white());
++
++  nvgBeginPath(v); nvgRoundedRect(v,125,89,1030,546,29);
++  nvgFillPaint(v,nvgBoxGradient(v,140,100,1000,524,22,36,nvgRGBA(0,110,255,65),nvgRGBA(0,42,130,0))); nvgFill(v);
++  nvgBeginPath(v); nvgRoundedRect(v,140,100,1000,524,20);
++  nvgFillPaint(v,nvgLinearGradient(v,140,100,1140,624,nvgRGB(6,18,38),nvgRGB(9,31,63))); nvgFill(v);
++  outline(v,140,100,1000,524,20,nvgRGB(0,132,255),1.5f);
++  outline(v,142,102,996,520,18,nvgRGBA(40,150,255,28),1);
++  nvgBeginPath(v); nvgMoveTo(v,676,148); nvgLineTo(v,676,592);
++  nvgStrokeWidth(v,1); nvgStrokeColor(v,nvgRGBA(0,121,240,120)); nvgStroke(v);
++
++  rounded(v,196,151,210,36,18,nvgRGB(0,112,255));
++  text(v,301,169,15,"ВХОД В АККАУНТ",white(),NVG_ALIGN_CENTER,true);
++  nvgTextLetterSpacing(v,-.6f);
++  text(v,196,235,43,"Вход в VK Play",white(),NVG_ALIGN_LEFT,true);
++  nvgTextLetterSpacing(v,0);
++  text(v,196,285,19,"Отсканируйте QR-код камерой телефона",muted());
++  const char *steps[]={"Откройте камеру телефона","Наведите её на QR-код","Подтвердите вход"};
++  for(int i=0;i<3;i++) {
++    float cy=350+i*64;
++    circle(v,223,cy,24,nvgRGB(4,15,33));
++    nvgBeginPath(v); nvgCircle(v,223,cy,24); nvgStrokeWidth(v,3.3f);
++    nvgStrokeColor(v,nvgRGB(0,126,255)); nvgStroke(v);
++    text(v,223,cy,24,std::to_string(i+1),white(),NVG_ALIGN_CENTER,true);
++    text(v,272,cy,22,steps[i],white());
++  }
++
++  if(s.canRefresh) {
++    nvgBeginPath(v); nvgRoundedRect(v,190,526,458,72,18);
++    nvgFillPaint(v,nvgBoxGradient(v,196,532,446,60,14,20,nvgRGBA(0,110,255,100),nvgRGBA(0,88,255,0))); nvgFill(v);
++  }
++  rounded(v,REFRESH_X,REFRESH_Y,REFRESH_W,REFRESH_H,13,
++          s.canRefresh?nvgRGB(0,108,250):nvgRGB(18,51,94));
++  outline(v,REFRESH_X,REFRESH_Y,REFRESH_W,REFRESH_H,13,
++          s.canRefresh?white():nvgRGB(57,91,133),s.canRefresh?2.3f:1);
++  circle(v,266,562,15,s.canRefresh?white():muted());
++  text(v,266,562,21,"X",nvgRGB(0,105,245),NVG_ALIGN_CENTER);
++  const char *button=s.phase==LoginPhase::Error?"Повторить вход":
++    (s.canRefresh?"Обновить QR-код":"Подключаемся…");
++  text(v,301,562,22,button,white(),NVG_ALIGN_LEFT,true);
++
++  rounded(v,714,156,374,374,20,nvgRGB(7,31,65));
++  outline(v,714,156,374,374,20,nvgRGB(0,101,225),1.3f);
++  qrCorners(v);
++  if(s.phase==LoginPhase::Waiting && qr) {
++    rounded(v,746,188,310,310,15,nvgRGB(255,255,255)); drawQr(v,*qr);
++  } else if(s.phase==LoginPhase::Loading) {
++    circle(v,901,330,48,nvgRGB(8,42,83));
++    nvgBeginPath(v); nvgArc(v,901,330,32,t*1.5f,t*1.5f+PI*1.45f,NVG_CW);
++    nvgStrokeColor(v,nvgRGB(0,152,255)); nvgStrokeWidth(v,4); nvgStroke(v);
++    text(v,901,412,20,"Получаем код входа",muted(),NVG_ALIGN_CENTER);
++  } else {
++    circle(v,901,254,28,nvgRGB(64,33,49)); text(v,901,254,34,"!",nvgRGB(255,155,155),NVG_ALIGN_CENTER,true);
++    text(v,901,309,24,"Не удалось войти",white(),NVG_ALIGN_CENTER,true);
++    nvgFontSize(v,18); nvgTextAlign(v,NVG_ALIGN_CENTER | NVG_ALIGN_TOP); nvgFillColor(v,muted());
++    nvgTextBox(v,760,343,282,s.error.c_str(),nullptr);
++  }
++  const float pulse=.65f+.35f*std::sin(t*2);
++  const NVGcolor dot=s.phase==LoginPhase::Error?nvgRGB(255,133,143):nvgRGBA(0,142,255,static_cast<unsigned char>(180+75*pulse));
++  circle(v,768,561,6,dot);
++  nvgFontSize(v,18);
++  // Transient status stays in one line; long error details live inside the card.
++  const std::string status=s.phase==LoginPhase::Error?"Нажмите X для повтора":s.status;
++  nvgSave(v); nvgIntersectScissor(v,784,545,290,33);
++  text(v,786,561,18,status,muted()); nvgRestore(v);
++  if(s.phase==LoginPhase::Waiting)
++    text(v,901,597,14,"cloud.vkplay.ru/tv  ·  "+s.code,muted(),NVG_ALIGN_CENTER);
++
++  rounded(v,0,650,1280,70,0,nvgRGBA(3,12,27,224));
++  nvgBeginPath(v); nvgMoveTo(v,0,650); nvgLineTo(v,1280,650);
++  nvgStrokeColor(v,nvgRGBA(109,158,219,64)); nvgStrokeWidth(v,1); nvgStroke(v);
++  keyHint(v,64,684,"B","Выйти"); keyHint(v,925,684,"Y","Отчёт");
++  text(v,1232,684,13,"Cloud Lite NX  1.1.4",muted(),NVG_ALIGN_RIGHT);
++  nvgRestore(v);
++}
++} // namespace vkpcnx
+diff --git a/vkpcnx/src/view/login_screen.cpp b/vkpcnx/src/view/login_screen.cpp
+new file mode 100644
+index 0000000..aadbcf3
+--- /dev/null
++++ b/vkpcnx/src/view/login_screen.cpp
+@@ -0,0 +1,53 @@
++#include "view/login_screen.hpp"
++#include <algorithm>
++
++namespace vkpcnx {
++LoginScreen::LoginScreen() {
++  setBackgroundColor(nvgRGB(3,10,24));
++  refreshTarget = new brls::Box();
++  refreshTarget->setId("login/refresh");
++  refreshTarget->setPositionType(brls::PositionType::ABSOLUTE);
++  refreshTarget->setFocusable(true);
++  refreshTarget->setHideHighlight(true);
++  refreshTarget->setHideClickAnimation(true);
++  refreshTarget->registerClickAction([this](brls::View *) {
++    if (scene.canRefresh && refresh) refresh();
++    return true;
++  });
++  refreshTarget->addGestureRecognizer(new brls::TapGestureRecognizer(refreshTarget));
++  addView(refreshTarget);
++}
++void LoginScreen::setLoading() {
++  scene = LoginSceneState{};
++  qr.reset();
++}
++void LoginScreen::setPairing(const std::string &code, const std::string &url) {
++  qr = qrcodegen::QrCode::encodeText(url.c_str(),qrcodegen::QrCode::Ecc::MEDIUM);
++  scene.phase = LoginPhase::Waiting; scene.code = code;
++  scene.status = "Ожидание входа"; scene.canRefresh = true; scene.error.clear();
++}
++void LoginScreen::setError(const std::string &message) {
++  scene.phase = LoginPhase::Error; scene.error = message; scene.canRefresh = true;
++  qr.reset();
++}
++void LoginScreen::setStatus(const std::string &message, bool canRefresh) {
++  scene.status = message; scene.canRefresh = canRefresh;
++}
++void LoginScreen::onLayout() {
++  const float scale = std::min(getWidth()/LOGIN_WIDTH,getHeight()/LOGIN_HEIGHT);
++  refreshTarget->setPositionLeft((getWidth()-LOGIN_WIDTH*scale)/2+REFRESH_X*scale);
++  refreshTarget->setPositionTop((getHeight()-LOGIN_HEIGHT*scale)/2+REFRESH_Y*scale);
++  refreshTarget->setDimensions(REFRESH_W*scale,REFRESH_H*scale);
++}
++void LoginScreen::draw(NVGcontext *v,float x,float y,float width,float height,
++                       brls::Style style,brls::FrameContext *ctx) {
++  const float scale = std::min(width/LOGIN_WIDTH,height/LOGIN_HEIGHT);
++  if (scale <= 0) return;
++  nvgSave(v); nvgTranslate(v,x+(width-LOGIN_WIDTH*scale)/2,y+(height-LOGIN_HEIGHT*scale)/2);
++  nvgScale(v,scale,scale);
++  const double seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
++  drawLoginScene(v,seconds,brls::Application::getDefaultFont(),scene,qr?&*qr:nullptr);
++  nvgRestore(v);
++  brls::Box::draw(v,x,y,width,height,style,ctx);
++}
++} // namespace vkpcnx
