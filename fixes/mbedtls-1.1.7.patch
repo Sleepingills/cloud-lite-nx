@@ -1,0 +1,264 @@
+diff --git a/CLOUD-LITE-START-HERE.md b/CLOUD-LITE-START-HERE.md
+index 908d148..903fd29 100644
+--- a/CLOUD-LITE-START-HERE.md
++++ b/CLOUD-LITE-START-HERE.md
+@@ -1,4 +1,11 @@
+-# Cloud Lite NX — исходный проект, версия 1.1.6
++# Cloud Lite NX — исходный проект, версия 1.1.7
++
++Версия 1.1.7: HTTPS переведён с curl 7.69.1/libnx SSL на curl 8.23.0/mbedTLS.
++Используется тот же mbedTLS 3.6.4 и набор доверенных сертификатов, что и для
++потоковых соединений. Проверка сертификата, имени сервера и срока действия
++сохранена. Журнал теперь отмечает начало запроса, а ошибки TLS содержат
++диагностику mbedTLS. Это позволяет различить зависание запроса и ошибку
++проверки сертификата. Работу на Switch необходимо проверить отдельно.
+ 
+ Версия 1.1.6: HTTP-клиент явно подключает встроенный файл доверенных
+ сертификатов cacert.pem, в том числе при обмене кода входа на токен.
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cea1a0b..f4052cc 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,7 +52,7 @@ endif ()
+ project(vkpcnx)
+ set(VERSION_MAJOR "1")
+ set(VERSION_MINOR "1")
+-set(VERSION_ALTER "6")
++set(VERSION_ALTER "7")
+ set(VERSION_BUILD "0")
+ set(PROJECT_DISPLAY_NAME "Cloud Lite NX")
+ set(PROJECT_AUTHOR "m4l3vich and Cloud Lite NX contributors")
+@@ -112,17 +112,14 @@ endif ()
+ 
+ # libcurl (https client)
+ if (PLATFORM_SWITCH)
+-    # devkitPro portlibs: pacman -S switch-curl switch-zlib switch-libopus switch-ffmpeg
+-    # (switch-curl uses the libnx SSL service, not mbedTLS)
++    # Build curl with the same mbedTLS used by the streaming libraries.
+     add_definitions(-DCURL_STATICLIB)
+     list(APPEND APP_PLATFORM_INCLUDE ${DEVKITPRO}/portlibs/switch/include)
+     # <endian.h> for the generated protobuf headers (newlib only has machine/endian.h)
+     list(APPEND APP_PLATFORM_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/switch/compat)
+-    # must precede nx (sockets) in link order
+-    list(PREPEND APP_PLATFORM_LIB curl z)
+-
+-    # mbedTLS 3.6 (DTLS-SRTP capable) for libwebsockets and libdatachannel
++    # mbedTLS 3.6 (DTLS-SRTP capable) for all TLS clients
+     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/switch/SwitchMbedTls.cmake)
++    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/switch/SwitchCurl.cmake)
+ else ()
+     find_package(CURL REQUIRED)
+     list(APPEND APP_PLATFORM_LIB CURL::libcurl)
+diff --git a/NOTICE b/NOTICE
+index 5d52428..8294e5b 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -1,4 +1,4 @@
+-Cloud Lite NX 1.1.6 — modified version of VKPCNX.
++Cloud Lite NX 1.1.7 — modified version of VKPCNX.
+ Upstream: https://github.com/m4l3vich/vkpcnx
+ Base commit: 8283e8eebe2e7f884746be0b6a36a66904ceecc5
+ Original author: m4l3vich. Original LICENSE is retained (Apache License 2.0).
+@@ -9,3 +9,4 @@ Borealis upstream: https://github.com/xfangfang/borealis
+ Pinned revision: 3ecf2de10226392ecb071c470bea9758a24cd6b1
+ Other dependencies keep their own licenses; consult the original build files
+ and dependency repositories. No affiliation with VK or Nintendo is implied.
++HTTPS: curl 8.23.0 (https://curl.se), curl license in its source COPYING.
+diff --git a/cmake/switch/SwitchCurl.cmake b/cmake/switch/SwitchCurl.cmake
+new file mode 100644
+index 0000000..04f5f37
+--- /dev/null
++++ b/cmake/switch/SwitchCurl.cmake
+@@ -0,0 +1,55 @@
++# Build HTTPS against the same mbedTLS as WebSockets/WebRTC. The old portlib
++# curl uses Horizon SSL and only reports a generic code 60 for OAuth failures.
++# Keep all certificate, hostname and date checks enabled in core/http.cpp.
++include(FetchContent)
++
++set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
++set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
++set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
++set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
++set(BUILD_LIBCURL_DOCS OFF CACHE BOOL "" FORCE)
++set(BUILD_MISC_DOCS OFF CACHE BOOL "" FORCE)
++set(ENABLE_CURL_MANUAL OFF CACHE BOOL "" FORCE)
++set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
++set(CURL_ENABLE_EXPORT_TARGET OFF CACHE BOOL "" FORCE)
++set(CURL_USE_MBEDTLS ON CACHE BOOL "" FORCE)
++set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
++set(CURL_USE_PKGCONFIG OFF CACHE BOOL "" FORCE)
++set(CURL_USE_CMAKECONFIG OFF CACHE BOOL "" FORCE)
++set(MBEDTLS_INCLUDE_DIR ${SWITCH_MBEDTLS_PREFIX}/include CACHE PATH "" FORCE)
++set(MBEDTLS_LIBRARY ${SWITCH_MBEDTLS_PREFIX}/lib/libmbedtls.a CACHE FILEPATH "" FORCE)
++set(MBEDX509_LIBRARY ${SWITCH_MBEDTLS_PREFIX}/lib/libmbedx509.a CACHE FILEPATH "" FORCE)
++set(MBEDCRYPTO_LIBRARY ${SWITCH_MBEDTLS_PREFIX}/lib/libmbedcrypto.a CACHE FILEPATH "" FORCE)
++set(MBEDTLS_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
++# libnx has no pthread_detach; requests already run on our managed workers.
++set(ENABLE_THREADED_RESOLVER OFF CACHE BOOL "" FORCE)
++set(ENABLE_ARES OFF CACHE BOOL "" FORCE)
++set(ENABLE_IPV6 OFF CACHE BOOL "" FORCE)
++set(ENABLE_UNIX_SOCKETS OFF CACHE BOOL "" FORCE)
++set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
++set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
++set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
++set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
++set(CURL_BROTLI OFF CACHE STRING "" FORCE)
++set(CURL_ZSTD OFF CACHE STRING "" FORCE)
++set(CURL_ZLIB ON CACHE STRING "" FORCE)
++set(ZLIB_INCLUDE_DIR ${DEVKITPRO}/portlibs/switch/include CACHE PATH "" FORCE)
++set(ZLIB_LIBRARY ${DEVKITPRO}/portlibs/switch/lib/libz.a CACHE FILEPATH "" FORCE)
++set(CURL_CA_BUNDLE "none" CACHE STRING "" FORCE)
++set(CURL_CA_PATH "none" CACHE STRING "" FORCE)
++set(CURL_CA_FALLBACK OFF CACHE BOOL "" FORCE)
++foreach (PROTOCOL DICT FILE FTP GOPHER IMAP LDAP LDAPS MQTT POP3 RTSP SMTP TELNET TFTP)
++    set(CURL_DISABLE_${PROTOCOL} ON CACHE BOOL "" FORCE)
++endforeach ()
++set(CURL_DISABLE_SOCKETPAIR ON CACHE BOOL "" FORCE)
++
++FetchContent_Declare(curl_http
++    URL https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.xz
++    URL_HASH SHA256=8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
++    DOWNLOAD_EXTRACT_TIMESTAMP ON)
++FetchContent_MakeAvailable(curl_http)
++# Never pick the portlib's 7.69 headers ahead of the new library headers.
++set(CMAKE_C_FLAGS "-I${curl_http_SOURCE_DIR}/include ${CMAKE_C_FLAGS}")
++set(CMAKE_CXX_FLAGS "-I${curl_http_SOURCE_DIR}/include ${CMAKE_CXX_FLAGS}")
++list(PREPEND APP_PLATFORM_LIB CURL::libcurl z)
++message(STATUS "Cloud Lite HTTPS: curl 8.23.0 + mbedTLS, certificate verification enabled")
+diff --git a/cmake/switch/SwitchMbedTls.cmake b/cmake/switch/SwitchMbedTls.cmake
+index db86530..ca5f4ea 100644
+--- a/cmake/switch/SwitchMbedTls.cmake
++++ b/cmake/switch/SwitchMbedTls.cmake
+@@ -1,7 +1,7 @@
+ # mbedTLS 3.6 for the Switch, built at *configure time* so that both
+ # libwebsockets (feature checks) and libdatachannel (find_package) see a
+ # real install. The switch-mbedtls portlib is 2.28 and lacks DTLS-SRTP, and
+-# curl on Switch uses the libnx SSL service, so nothing else links mbedTLS.
++# curl also uses this build instead of the libnx SSL service.
+ #
+ # Defines the imported targets MbedTLS::MbedTLS / MbedTLS::MbedX509 /
+ # MbedTLS::MbedCrypto and SWITCH_MBEDTLS_PREFIX.
+diff --git a/cmake/switch/mbedtls_user_config.h b/cmake/switch/mbedtls_user_config.h
+index 5b22056..7ccdab5 100644
+--- a/cmake/switch/mbedtls_user_config.h
++++ b/cmake/switch/mbedtls_user_config.h
+@@ -2,8 +2,8 @@
+  *
+  * Applied on top of the default mbedtls_config.h through
+  * MBEDTLS_USER_CONFIG_FILE. The library is used by libwebsockets (TLS client
+- * for the signalling WebSockets) and libdatachannel (DTLS-SRTP), curl uses
+- * the libnx SSL service instead. */
++ * for the signalling WebSockets), libdatachannel (DTLS-SRTP), and curl
++ * (HTTPS authentication/API requests). */
+ 
+ /* No /dev/urandom or getrandom(): entropy comes from mbedtls_hardware_poll()
+  * (vkpcnx/src/core/platform/switch_mbedtls_platform.cpp → libnx randomGet). */
+diff --git a/scripts/test-http-tls.py b/scripts/test-http-tls.py
+index 7db4b2c..289ea38 100644
+--- a/scripts/test-http-tls.py
++++ b/scripts/test-http-tls.py
+@@ -38,7 +38,8 @@ with tempfile.TemporaryDirectory(prefix="cloud-lite-tls-") as tmp:
+     binary = work / "probe"
+     # http.cpp and tls.cpp have no Switch SDK dependency. Only their
+     # missing-resource policy is selected; TLS itself uses host libcurl.
+-    flags = shlex.split(run(["curl-config", "--cflags", "--libs"]).stdout)
++    flags = shlex.split(run([os.environ.get("CURL_CONFIG", "curl-config"),
++                            "--cflags", "--static-libs"]).stdout)
+     run([os.environ.get("CXX", "g++"), "-std=c++17", "-Wall", "-Wextra", "-Werror",
+          "-D__SWITCH__", '-DBRLS_RESOURCES="./resources/"',
+          "-I" + str(ROOT / "tests/http_host"),
+diff --git a/scripts/test-mbedtls-http.sh b/scripts/test-mbedtls-http.sh
+new file mode 100644
+index 0000000..52d5203
+--- /dev/null
++++ b/scripts/test-mbedtls-http.sh
+@@ -0,0 +1,52 @@
++#!/usr/bin/env bash
++# Build the release's HTTPS backend on Linux and exercise real TLS validation.
++set -euo pipefail
++cd "$(dirname "$0")/.."
++TEST_ROOT="$PWD/build-http-tls"
++TEST_PREFIX="$TEST_ROOT/prefix"
++mkdir -p "$TEST_ROOT" "$TEST_PREFIX"
++curl --fail --location --retry 2 --max-time 120 \
++  https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.4/mbedtls-3.6.4.tar.bz2 \
++  -o "$TEST_ROOT/mbedtls.tar.bz2"
++tar -xf "$TEST_ROOT/mbedtls.tar.bz2" -C "$TEST_ROOT"
++cmake -S "$TEST_ROOT/mbedtls-3.6.4" -B "$TEST_ROOT/mbed-build" \
++  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$TEST_PREFIX" \
++  -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF -DGEN_FILES=OFF \
++  -DUSE_SHARED_MBEDTLS_LIBRARY=OFF -DUSE_STATIC_MBEDTLS_LIBRARY=ON
++cmake --build "$TEST_ROOT/mbed-build" --parallel 2 --target install
++
++curl --fail --location --retry 2 --max-time 120 \
++  https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.xz \
++  -o "$TEST_ROOT/curl.tar.xz"
++python3 - "$TEST_ROOT/curl.tar.xz" <<'PY'
++from pathlib import Path
++import hashlib, sys
++assert hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() == \
++    '8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5'
++PY
++tar -xf "$TEST_ROOT/curl.tar.xz" -C "$TEST_ROOT"
++cmake -S "$TEST_ROOT/curl-8.23.0" -B "$TEST_ROOT/curl-build" \
++  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$TEST_PREFIX" \
++  -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DBUILD_STATIC_CURL=ON \
++  -DBUILD_TESTING=OFF -DBUILD_LIBCURL_DOCS=OFF -DBUILD_MISC_DOCS=OFF \
++  -DENABLE_CURL_MANUAL=OFF -DCURL_USE_OPENSSL=OFF -DCURL_USE_MBEDTLS=ON \
++  -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF -DUSE_LIBIDN2=OFF \
++  -DUSE_NGHTTP2=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF \
++  -DENABLE_THREADED_RESOLVER=OFF -DENABLE_ARES=OFF \
++  -DCURL_USE_PKGCONFIG=OFF -DCURL_USE_CMAKECONFIG=OFF \
++  -DMBEDTLS_INCLUDE_DIR="$TEST_PREFIX/include" \
++  -DMBEDTLS_LIBRARY="$TEST_PREFIX/lib/libmbedtls.a" \
++  -DMBEDX509_LIBRARY="$TEST_PREFIX/lib/libmbedx509.a" \
++  -DMBEDCRYPTO_LIBRARY="$TEST_PREFIX/lib/libmbedcrypto.a"
++cmake --build "$TEST_ROOT/curl-build" --parallel 2 --target install
++export CURL_CONFIG="$TEST_PREFIX/bin/curl-config"
++"$TEST_PREFIX/bin/curl" --version
++python3 scripts/test-http-tls.py
++
++# Public, unauthenticated HEAD requests only. No pairing/OAuth codes are sent.
++# HTTP 4xx is fine; here we are checking the TLS certificate, not logging in.
++for TLS_HOST in api.cloud.vkplay.ru o2-ext-ac.vkplay.ru; do
++  "$TEST_PREFIX/bin/curl" --silent --show-error --head --ipv4 --max-time 20 \
++    --cacert "$PWD/resources/cacert.pem" --output /dev/null \
++    --write-out "$TLS_HOST TLS verified; HTTP %{http_code}\n" "https://$TLS_HOST/"
++done
+diff --git a/vkpcnx/src/core/http.cpp b/vkpcnx/src/core/http.cpp
+index 0373dab..2d7e6b0 100644
+--- a/vkpcnx/src/core/http.cpp
++++ b/vkpcnx/src/core/http.cpp
+@@ -92,9 +92,8 @@ Http::Response Http::perform(
+     return res;
+   }
+ 
+-  // The Switch curl backend uses the console's SSL service. Its built-in
+-  // roots can differ from the bundled Mozilla roots used by our WebSockets.
+-  // Explicitly import the same bundle for HTTPS, including OAuth exchange.
++  // HTTPS and WebSockets use the same bundled Mozilla trust roots.
++  // Explicitly set the bundle for every request, including OAuth exchange.
+   const std::string caBundle = vkpcnx::utils::caBundlePath();
+ #ifdef __SWITCH__
+   if (caBundle.empty()) {
+@@ -159,6 +158,7 @@ Http::Response Http::perform(
+     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body->size()));
+   }
+ 
++  brls::Logger::debug("Http: {} {} starting", method, url);
+   CURLcode rc = curl_easy_perform(curl);
+   res.transportCode = static_cast<int>(rc);
+   if (rc != CURLE_OK) {
+diff --git a/vkpcnx/src/view/login_scene.cpp b/vkpcnx/src/view/login_scene.cpp
+index 2024e75..3375579 100644
+--- a/vkpcnx/src/view/login_scene.cpp
++++ b/vkpcnx/src/view/login_scene.cpp
+@@ -181,7 +181,7 @@ void drawLoginScene(NVGcontext *v,double seconds,int font,
+   nvgBeginPath(v); nvgMoveTo(v,0,650); nvgLineTo(v,1280,650);
+   nvgStrokeColor(v,nvgRGBA(109,158,219,64)); nvgStrokeWidth(v,1); nvgStroke(v);
+   keyHint(v,64,684,"B","Выйти"); keyHint(v,925,684,"Y","Отчёт");
+-  text(v,1232,684,13,"Cloud Lite NX  1.1.6",muted(),NVG_ALIGN_RIGHT);
++  text(v,1232,684,13,"Cloud Lite NX  1.1.7",muted(),NVG_ALIGN_RIGHT);
+   nvgRestore(v);
+ }
+ } // namespace vkpcnx
