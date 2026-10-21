@@ -1,0 +1,242 @@
+diff --git a/CLOUD-LITE-START-HERE.md b/CLOUD-LITE-START-HERE.md
+index 903fd29..150f225 100644
+--- a/CLOUD-LITE-START-HERE.md
++++ b/CLOUD-LITE-START-HERE.md
+@@ -1,4 +1,10 @@
+-# Cloud Lite NX — исходный проект, версия 1.1.7
++# Cloud Lite NX — исходный проект, версия 1.1.8
++
++Версия 1.1.8: исправлен повторный вылет после закрытия окна отчёта при запуске
++с сохранённым аккаунтом. Корневой экран сохраняет действительный фокус, пока
++профиль и каталог загружаются. После загрузки управление переходит к каталогу,
++не перехватывая его у открытого диалога. Исходный вылет при выходе из игры
++этим отчётом не установлен; для него нужен журнал самого игрового сеанса.
+ 
+ Версия 1.1.7: HTTPS переведён с curl 7.69.1/libnx SSL на curl 8.23.0/mbedTLS.
+ Используется тот же mbedTLS 3.6.4 и набор доверенных сертификатов, что и для
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f4052cc..f3f32b5 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,7 +52,7 @@ endif ()
+ project(vkpcnx)
+ set(VERSION_MAJOR "1")
+ set(VERSION_MINOR "1")
+-set(VERSION_ALTER "7")
++set(VERSION_ALTER "8")
+ set(VERSION_BUILD "0")
+ set(PROJECT_DISPLAY_NAME "Cloud Lite NX")
+ set(PROJECT_AUTHOR "m4l3vich and Cloud Lite NX contributors")
+diff --git a/NOTICE b/NOTICE
+index 8294e5b..13b6086 100644
+--- a/NOTICE
++++ b/NOTICE
+@@ -1,4 +1,4 @@
+-Cloud Lite NX 1.1.7 — modified version of VKPCNX.
++Cloud Lite NX 1.1.8 — modified version of VKPCNX.
+ Upstream: https://github.com/m4l3vich/vkpcnx
+ Base commit: 8283e8eebe2e7f884746be0b6a36a66904ceecc5
+ Original author: m4l3vich. Original LICENSE is retained (Apache License 2.0).
+diff --git a/resources/xml/activity/main.xml b/resources/xml/activity/main.xml
+index b5c8395..61d2b2b 100644
+--- a/resources/xml/activity/main.xml
++++ b/resources/xml/activity/main.xml
+@@ -1,5 +1,5 @@
+ <!-- Modified for Cloud Lite NX: startup status and recovery controls. -->
+-<brls:AppletFrame id="main/root">
++<vkpcnx:MainScreen id="main/root">
+   <brls:Box width="auto" height="auto" paddingLeft="30" paddingRight="30">
+     <brls:Box id="main/loader" axis="column" alignItems="center" justifyContent="center" grow="1">
+       <brls:ProgressSpinner id="login/spinner" size="large" width="100" height="100"/>
+@@ -13,4 +13,4 @@
+     </brls:Box>
+     <brls:RecyclerFrame visibility="gone" id="main/content" width="auto" grow="1"/>
+   </brls:Box>
+-</brls:AppletFrame>
+\ No newline at end of file
++</vkpcnx:MainScreen>
+diff --git a/scripts/test-startup.sh b/scripts/test-startup.sh
+index 36f0ce4..be972db 100755
+--- a/scripts/test-startup.sh
++++ b/scripts/test-startup.sh
+@@ -6,6 +6,9 @@ mkdir -p build-startup-tests
+ "${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -Ivkpcnx/include -I"$JSON_INCLUDE" \
+   tests/auth_reply_test.cpp -o build-startup-tests/auth_reply_test
+ ./build-startup-tests/auth_reply_test
++"${CXX:-g++}" -std=c++17 -Wall -Wextra -Werror -Itests/focus_host -Ivkpcnx/include \
++  tests/startup_focus_test.cpp -o build-startup-tests/startup_focus_test
++./build-startup-tests/startup_focus_test
+ python3 - <<'PY'
+ from pathlib import Path
+ import re
+diff --git a/tests/focus_host/borealis.hpp b/tests/focus_host/borealis.hpp
+new file mode 100644
+index 0000000..9fc355f
+--- /dev/null
++++ b/tests/focus_host/borealis.hpp
+@@ -0,0 +1,17 @@
++#pragma once
++// Headless UI surface for the MainScreen focus contract. Rendering is covered
++// by the Switch build/device check, not by this fixture.
++namespace brls {
++class View {
++public:
++  virtual ~View() = default;
++  virtual View *getDefaultFocus() { return this; }
++};
++class AppletFrame : public View {
++public:
++  View *child = nullptr;
++  View *getDefaultFocus() override { return child; }
++  void setHideHighlight(bool) {}
++  void setHideClickAnimation(bool) {}
++};
++}
+diff --git a/tests/startup_focus_test.cpp b/tests/startup_focus_test.cpp
+new file mode 100644
+index 0000000..ad439c4
+--- /dev/null
++++ b/tests/startup_focus_test.cpp
+@@ -0,0 +1,67 @@
++#include "view/main_screen.hpp"
++#include <cassert>
++#include <iostream>
++#include <memory>
++#include <vector>
++
++// Model the pinned Borealis push/pop focus contract: push saves only non-null
++// focus; pop only restores a saved entry; giveFocus ignores null targets.
++// The regression occurs when the first report opens above an empty catalogue.
++struct FocusStack {
++  brls::View *current = nullptr;
++  std::vector<brls::View *> saved;
++  void focus(brls::View *view) {
++    auto *next = view ? view->getDefaultFocus() : nullptr;
++    if (next) current = next;
++  }
++  void open(brls::View *modal) {
++    if (current) saved.push_back(current);
++    focus(modal);
++  }
++  void close() {
++    if (!saved.empty()) {
++      focus(saved.back());
++      saved.pop_back();
++    }
++  }
++};
++
++template<class Screen> bool survivesReport(bool catalogueBeforeClose) {
++  Screen screen;
++  brls::View game;
++  FocusStack ui;
++  ui.focus(&screen);
++  auto modal = std::make_unique<brls::View>();
++  ui.open(modal.get());
++  if (catalogueBeforeClose) screen.child = &game;
++  ui.close();
++  const bool safe = ui.current != modal.get();
++  modal.reset();
++  if (!safe) return false; // Do not dereference the old dangling button.
++  assert(ui.current == (catalogueBeforeClose ? &game : &screen));
++  if (!catalogueBeforeClose) {
++    screen.child = &game;
++    ui.focus(&screen);
++    assert(ui.current == &game);
++  }
++  // Nested reports must also restore a live target.
++  brls::View report, result;
++  ui.open(&report);
++  ui.open(&result);
++  ui.close();
++  assert(ui.current == &report);
++  ui.close();
++  assert(ui.current == &game);
++  // Empty/error state keeps a live fallback and does not allocate a dummy view.
++  screen.child = nullptr;
++  assert(screen.getDefaultFocus() == &screen);
++  return true;
++}
++
++int main() {
++  for (bool early : {false, true}) {
++    assert(!survivesReport<brls::AppletFrame>(early)); // Reproduce 1.1.7.
++    assert(survivesReport<vkpcnx::MainScreen>(early));
++  }
++  std::cout << "Startup report focus regression passed (both load/close orders)\n";
++}
+diff --git a/vkpcnx/include/view/main_screen.hpp b/vkpcnx/include/view/main_screen.hpp
+new file mode 100644
+index 0000000..95a7a54
+--- /dev/null
++++ b/vkpcnx/include/view/main_screen.hpp
+@@ -0,0 +1,21 @@
++#pragma once
++#include <borealis.hpp>
++
++namespace vkpcnx {
++
++// During asynchronous startup the catalogue and account controls are absent.
++// Borealis only saves a non-null focus when opening a dialog. Without a live
++// fallback, closing the startup report leaves currentFocus on a deleted button.
++class MainScreen : public brls::AppletFrame {
++public:
++  MainScreen() { setHideHighlight(true); setHideClickAnimation(true); }
++
++  brls::View *getDefaultFocus() override {
++    auto *child = brls::AppletFrame::getDefaultFocus();
++    return child ? child : this;
++  }
++
++  static brls::View *create() { return new MainScreen(); }
++};
++
++} // namespace vkpcnx
+diff --git a/vkpcnx/src/activity/main_activity.cpp b/vkpcnx/src/activity/main_activity.cpp
+index 017b4d4..f654334 100644
+--- a/vkpcnx/src/activity/main_activity.cpp
++++ b/vkpcnx/src/activity/main_activity.cpp
+@@ -147,6 +147,10 @@ void MainActivity::fetchMoreGames(vkpcnx::GamesDataSource::MoreGamesCallback cb)
+         loader->setVisibility(brls::Visibility::GONE);
+         content->setVisibility(brls::Visibility::VISIBLE);
+         cb(std::move(gamesList));
++        // Hand the loading fallback to the catalogue once it is ready. A modal
++        // may still own focus: in that case let its saved MainScreen restore it.
++        if (brls::Application::getCurrentFocus() == appletFrame.getView())
++          brls::Application::giveFocus(content);
+       });
+     });
+   } catch (const std::exception &) {
+diff --git a/vkpcnx/src/main.cpp b/vkpcnx/src/main.cpp
+index c6b169e..c8b0fea 100644
+--- a/vkpcnx/src/main.cpp
++++ b/vkpcnx/src/main.cpp
+@@ -23,6 +23,7 @@
+ #include "view/onscreen_keyboard.hpp"
+ #include "view/qrcode.hpp"
+ #include "view/login_screen.hpp"
++#include "view/main_screen.hpp"
+ #include "view/stream_view.hpp"
+ #include "view/striped_list.hpp"
+ 
+@@ -97,6 +98,7 @@ int main(int argc, char *argv[]) {
+   });
+   brls::Application::registerXMLView("vkpcnx:QrCode", vkpcnx::QrCode::create);
+   brls::Application::registerXMLView("vkpcnx:LoginScreen", vkpcnx::LoginScreen::create);
++  brls::Application::registerXMLView("vkpcnx:MainScreen", vkpcnx::MainScreen::create);
+   brls::Application::registerXMLView("vkpcnx:StreamView", [] { return new vkpcnx::StreamView(); });
+   brls::Application::registerXMLView("vkpcnx:StripedList", vkpcnx::StripedList::create);
+   brls::Application::registerXMLView("vkpcnx:StripedListRow", vkpcnx::StripedListRow::create);
+diff --git a/vkpcnx/src/view/login_scene.cpp b/vkpcnx/src/view/login_scene.cpp
+index 3375579..df5e6e8 100644
+--- a/vkpcnx/src/view/login_scene.cpp
++++ b/vkpcnx/src/view/login_scene.cpp
+@@ -181,7 +181,7 @@ void drawLoginScene(NVGcontext *v,double seconds,int font,
+   nvgBeginPath(v); nvgMoveTo(v,0,650); nvgLineTo(v,1280,650);
+   nvgStrokeColor(v,nvgRGBA(109,158,219,64)); nvgStrokeWidth(v,1); nvgStroke(v);
+   keyHint(v,64,684,"B","Выйти"); keyHint(v,925,684,"Y","Отчёт");
+-  text(v,1232,684,13,"Cloud Lite NX  1.1.7",muted(),NVG_ALIGN_RIGHT);
++  text(v,1232,684,13,"Cloud Lite NX  1.1.8",muted(),NVG_ALIGN_RIGHT);
+   nvgRestore(v);
+ }
+ } // namespace vkpcnx

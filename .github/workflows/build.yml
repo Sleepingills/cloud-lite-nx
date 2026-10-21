@@ -26,6 +26,7 @@ jobs:
           git apply --directory=source/Cloud-Lite-NX fixes/layout-1.1.5.patch
           git apply --directory=source/Cloud-Lite-NX fixes/tls-1.1.6.patch
           git apply --directory=source/Cloud-Lite-NX fixes/mbedtls-1.1.7.patch
+          git apply --directory=source/Cloud-Lite-NX fixes/focus-1.1.8.patch
           chmod +x source/Cloud-Lite-NX/scripts/*.sh
 
       - name: Validate mbedTLS HTTPS backend
