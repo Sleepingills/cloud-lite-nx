@@ -66,10 +66,10 @@ index 5d52428..8294e5b 100644
 +HTTPS: curl 8.23.0 (https://curl.se), curl license in its source COPYING.
 diff --git a/cmake/switch/SwitchCurl.cmake b/cmake/switch/SwitchCurl.cmake
 new file mode 100644
-index 0000000..56f4053
+index 0000000..0cbe2e7
 --- /dev/null
 +++ b/cmake/switch/SwitchCurl.cmake
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,67 @@
 +# Build HTTPS against the same mbedTLS as WebSockets/WebRTC. The old portlib
 +# curl uses Horizon SSL and only reports a generic code 60 for OAuth failures.
 +# Keep all certificate, hostname and date checks enabled in core/http.cpp.
@@ -114,6 +114,9 @@ index 0000000..56f4053
 +    set(CURL_DISABLE_${PROTOCOL} ON CACHE BOOL "" FORCE)
 +endforeach ()
 +set(CURL_DISABLE_SOCKETPAIR ON CACHE BOOL "" FORCE)
++# newlib declares basename(), but the Switch link does not provide it.
++# Use curl's built-in implementation rather than the compile-only probe.
++set(HAVE_BASENAME OFF CACHE BOOL "" FORCE)
 +
 +# curl's FindMbedTLS otherwise creates an imported target whose headers are
 +# emitted as -isystem. GCC then drops our matching -I, allowing the portlib's
