@@ -66,10 +66,10 @@ index 5d52428..8294e5b 100644
 +HTTPS: curl 8.23.0 (https://curl.se), curl license in its source COPYING.
 diff --git a/cmake/switch/SwitchCurl.cmake b/cmake/switch/SwitchCurl.cmake
 new file mode 100644
-index 0000000..04f5f37
+index 0000000..56f4053
 --- /dev/null
 +++ b/cmake/switch/SwitchCurl.cmake
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,64 @@
 +# Build HTTPS against the same mbedTLS as WebSockets/WebRTC. The old portlib
 +# curl uses Horizon SSL and only reports a generic code 60 for OAuth failures.
 +# Keep all certificate, hostname and date checks enabled in core/http.cpp.
@@ -114,6 +114,15 @@ index 0000000..04f5f37
 +    set(CURL_DISABLE_${PROTOCOL} ON CACHE BOOL "" FORCE)
 +endforeach ()
 +set(CURL_DISABLE_SOCKETPAIR ON CACHE BOOL "" FORCE)
++
++# curl's FindMbedTLS otherwise creates an imported target whose headers are
++# emitted as -isystem. GCC then drops our matching -I, allowing the portlib's
++# older headers to win. Reuse the existing non-system 3.6 targets instead.
++add_library(CURL::mbedtls INTERFACE IMPORTED GLOBAL)
++set_target_properties(CURL::mbedtls PROPERTIES
++    IMPORTED_NO_SYSTEM TRUE
++    INTERFACE_INCLUDE_DIRECTORIES "${SWITCH_MBEDTLS_PREFIX}/include"
++    INTERFACE_LINK_LIBRARIES "MbedTLS::MbedTLS;MbedTLS::MbedX509;MbedTLS::MbedCrypto")
 +
 +FetchContent_Declare(curl_http
 +    URL https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.xz
